@@ -2,8 +2,6 @@
 # simulation/parallel_shots.jl
 #
 # Intelligent parallel shot execution for maximum GPU utilization
-# - Multi-GPU: distribute shots across all available devices
-# - Auto-detect hardware and optimize accordingly
 # ==============================================================================
 
 # ==============================================================================
@@ -16,14 +14,14 @@ Estimate GPU memory required for simulation (in bytes).
 function estimate_memory_usage(nx::Int, nz::Int, nt::Int, n_rec::Int)
     sizeof_float = 4  # Float32
     
-    # Wavefield: vx, vz, txx, tzz, txz
-    wavefield = nx * nz * 5 * sizeof_float
+    # Wavefield: vx, vz, txx, tzz, txz (x2 for old values)
+    wavefield = nx * nz * 10 * sizeof_float
     
     # Medium: lam, mu_txx, mu_txz, rho_vx, rho_vz
     medium = nx * nz * 5 * sizeof_float
     
     # HABC buffers
-    habc = nx * nz * 4 * sizeof_float  # boundaries and weights
+    habc = nx * nz * 4 * sizeof_float
     
     # Gather output
     gather = nt * n_rec * sizeof_float
@@ -98,7 +96,7 @@ function print_hardware_info(nx::Int, nz::Int, nt::Int, n_rec::Int)
     println("     Total:      $(round(mem.total / 1024^2, digits=1)) MB")
     
     gpus = get_gpu_info()
-    if gpus !== nothing
+    if gpus !== nothing && !isempty(gpus)
         println("\n  🎮 Available GPUs:")
         for gpu in gpus
             status = gpu.free_memory > mem.total ? "✓" : "⚠"
@@ -138,22 +136,6 @@ end
                          free_surface=true, on_shot_complete=nothing, output_dir="")
 
 Run shots distributed across multiple GPUs for maximum parallelism.
-
-# Arguments
-- `vp, vs, rho`: Velocity model arrays (CPU)
-- `dx, dz`: Grid spacing
-- `nbc`: Number of boundary cells
-- `fd_order`: Finite difference order
-- `rec_x, rec_z`: Receiver positions
-- `src_x, src_z`: Source positions for all shots
-- `wavelet`: Source wavelet
-- `params`: SimParams
-- `free_surface`: Enable free surface
-- `on_shot_complete`: Callback function(ShotResult)
-- `output_dir`: Directory for saving gathers (empty = don't save)
-
-# Returns
-Vector{ShotResult}
 """
 function run_shots_multi_gpu!(
     vp::Matrix{Float32}, vs::Matrix{Float32}, rho::Matrix{Float32},
@@ -220,18 +202,18 @@ function run_shots_multi_gpu!(
             @info "GPU $(gpu_id-1) ($gpu_name) starting $(length(shot_ids)) shots"
             
             # Initialize everything on this GPU
-            backend = CUDABackend()
+            be = CUDABackend()
             
-            medium = init_medium(vp, vs, rho, dx, dz, nbc, fd_order, backend;
+            medium = init_medium(vp, vs, rho, dx, dz, nbc, fd_order, be;
                                 free_surface=free_surface)
             
             avg_vp = sum(vp) / length(vp)
             habc = init_habc(medium.nx, medium.nz, nbc, params.dt, dx, dz,
-                           avg_vp, backend)
+                           avg_vp, be)
             
-            fd_coeffs = to_device(get_fd_coefficients(fd_order), backend)
+            fd_coeffs = to_device(get_fd_coefficients(fd_order), be)
             
-            wavefield = Wavefield(medium.nx, medium.nz, backend)
+            wavefield = Wavefield(medium.nx, medium.nz, be)
             
             # Setup receiver template
             rec_template = setup_receivers(rec_x, rec_z, medium; type=rec_type)
@@ -245,7 +227,7 @@ function run_shots_multi_gpu!(
                 src_i = round(Int, (src_x[shot_id] + nbc * dx) / dx) + 1
                 src_j = round(Int, (src_z[shot_id] + nbc * dz) / dz) + 1
                 source = Source(src_x[shot_id], src_z[shot_id], src_i, src_j,
-                              to_device(wavelet, backend))
+                              to_device(wavelet, be))
                 
                 # Create receiver for this shot
                 receivers = Receivers(
@@ -257,17 +239,17 @@ function run_shots_multi_gpu!(
                 
                 # Time loop
                 for it in 1:params.nt
-                    update_velocity!(backend, wavefield, medium, fd_coeffs, params)
-                    apply_habc_velocity!(backend, wavefield, habc, medium)
-                    update_stress!(backend, wavefield, medium, fd_coeffs, params)
-                    apply_habc_stress!(backend, wavefield, habc, medium)
+                    update_velocity!(be, wavefield, medium, fd_coeffs, params)
+                    apply_habc_velocity!(be, wavefield, habc, medium)
+                    update_stress!(be, wavefield, medium, fd_coeffs, params)
+                    apply_habc_stress!(be, wavefield, habc, medium)
                     
                     if medium.free_surface
-                        apply_free_surface!(backend, wavefield, medium, params)
+                        apply_free_surface!(be, wavefield, medium, params)
                     end
                     
-                    inject_source!(backend, wavefield, source, it, params)
-                    record_receivers!(backend, wavefield, receivers, it)
+                    inject_source!(be, wavefield, source, it, params)
+                    record_receivers!(be, wavefield, receivers, it)
                 end
                 
                 CUDA.synchronize()
@@ -330,9 +312,6 @@ end
                     nbc=50, fd_order=8, kwargs...)
 
 Automatically choose the best execution strategy based on available hardware.
-- Multi-GPU: If multiple GPUs available
-- Single GPU: If one GPU available  
-- CPU: If no GPU available (uses threaded kernels)
 """
 function run_shots_auto!(
     model::VelocityModel,

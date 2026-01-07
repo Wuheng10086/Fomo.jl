@@ -4,28 +4,11 @@
 # Shot management - clean separation of single/multi-shot logic
 # ==============================================================================
 
+# ShotResult is defined in core/structures.jl
+
 # ==============================================================================
 # Single Shot Execution
 # ==============================================================================
-
-"""
-    ShotResult
-
-Result from a single shot simulation.
-Contains gather data and geometry information for migration.
-"""
-struct ShotResult
-    gather::Matrix{Float32}   # [nt × n_rec] - always on CPU
-    shot_id::Int
-    
-    # Source position (grid indices)
-    src_i::Int
-    src_j::Int
-    
-    # Receiver positions (grid indices)
-    rec_i::Vector{Int}
-    rec_j::Vector{Int}
-end
 
 """
     run_shot!(backend, W, M, H, a, src, rec, params; kwargs) -> ShotResult
@@ -214,9 +197,14 @@ function _create_receivers(::CPUBackend, template::Receivers, nt::Int)
 end
 
 function _create_receivers(::CUDABackend, template::Receivers, nt::Int)
+    if !CUDA_AVAILABLE[]
+        error("CUDA not functional (no GPU available)")
+    end
     # Convert indices to GPU
-    i_gpu = CuArray(Int32.(template.i isa CuArray ? Array(template.i) : template.i))
-    j_gpu = CuArray(Int32.(template.j isa CuArray ? Array(template.j) : template.j))
+    i_cpu = template.i isa Array ? template.i : Array(template.i)
+    j_cpu = template.j isa Array ? template.j : Array(template.j)
+    i_gpu = CuArray(Int32.(i_cpu))
+    j_gpu = CuArray(Int32.(j_cpu))
     data = CUDA.zeros(Float32, nt, length(i_gpu))
     return Receivers(i_gpu, j_gpu, data, template.type)
 end

@@ -40,11 +40,12 @@ struct VelocityModel
 end
 
 # Constructor with auto-computed dimensions
+# Note: Seismic convention - data is stored as vp[nz, nx] (depth first)
 function VelocityModel(vp, vs, rho, dx, dz; 
                        x_origin=0.0f0, z_origin=0.0f0, name="unnamed")
-    nx, nz = size(vp)
-    @assert size(vs) == (nx, nz) "vs size mismatch"
-    @assert size(rho) == (nx, nz) "rho size mismatch"
+    nz, nx = size(vp)  # Seismic convention: depth is first dimension
+    @assert size(vs) == (nz, nx) "vs size mismatch"
+    @assert size(rho) == (nz, nx) "rho size mismatch"
     VelocityModel(
         Float32.(vp), Float32.(vs), Float32.(rho),
         Float32(dx), Float32(dz), nx, nz,

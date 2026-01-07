@@ -39,13 +39,14 @@ function main_synthetic()
     DX, DZ = 10.0f0, 10.0f0
     NX, NZ = 400, 200
     
-    vp = fill(3000.0f0, NX, NZ)
-    vs = fill(1800.0f0, NX, NZ)
-    rho = fill(2200.0f0, NX, NZ)
+    # Note: data is stored as [nz, nx] (depth first)
+    vp = fill(3000.0f0, NZ, NX)
+    vs = fill(1800.0f0, NZ, NX)
+    rho = fill(2200.0f0, NZ, NX)
     
-    # Add a layer
-    vp[:, NZ÷2:end] .= 4000.0f0
-    vs[:, NZ÷2:end] .= 2400.0f0
+    # Add a layer (affects lower half of depth)
+    vp[NZ÷2:end, :] .= 4000.0f0
+    vs[NZ÷2:end, :] .= 2400.0f0
     
     # Create model struct
     model = VelocityModel(vp, vs, rho, DX, DZ; name="synthetic")
@@ -53,15 +54,12 @@ function main_synthetic()
     # Define geometry
     x_src = Float32[model.nx * DX / 2]
     z_src = Float32[50.0]
-    x_rec = Float32.(range(0, (NX-1)*DX, step=50))
+    x_rec = Float32.(range(0, (model.nx-1)*DX, step=50))
     z_rec = fill(10.0f0, length(x_rec))
     
     # Check setup visually
     plot_setup(model, x_src, z_src, x_rec, z_rec; 
-               output="$(OUTPUT_DIR)setup_check.png")
-    
-    println("\nPress Enter to continue, or Ctrl+C to cancel...")
-    readline()
+               output="$(OUTPUT_DIR)synthetic_setup.png")
     
     run_simulation_with_model(model, x_src, z_src, x_rec, z_rec)
 end
@@ -72,6 +70,8 @@ end
 
 function main_from_file(model_path::String)
     @info "Loading model from: $model_path"
+    
+    model_name = splitext(basename(model_path))[1]
 
     # Load model (auto-detects format)
     model = load_model(model_path)
@@ -88,13 +88,10 @@ function main_from_file(model_path::String)
     x_rec = Float32.(range(0, x_max, step=15))
     z_rec = fill(50.0f0, length(x_rec))
     
-    # Check setup visually BEFORE running!
+    # Check setup visually
     plot_setup(model, x_src, z_src, x_rec, z_rec; 
-               output="$(OUTPUT_DIR)setup_check.png",
-               title="$(model.name) - Survey Setup")
-    
-    println("\nPress Enter to continue, or Ctrl+C to cancel...")
-    readline()
+               output="$(OUTPUT_DIR)$(model_name)_setup.png",
+               title="$(model_name) - Survey Setup")
     
     run_simulation_with_model(model, x_src, z_src, x_rec, z_rec)
 end
@@ -116,7 +113,7 @@ function run_simulation_with_model(model::VelocityModel,
     
     # Initialize
     medium = init_medium(model, NBC, FD_ORDER, be; free_surface=true)
-    habc = init_habc(medium.nx, medium.nz, NBC, dt, model.dx, model.dz, mean(model.vp), be)
+    habc = init_habc(medium.nx, medium.nz, nbc, params.dt, model.dx, model.dz, mean(model.vp), be)
     params = SimParams(dt, nt, model.dx, model.dz, FD_ORDER)
     
     @info "Simulation setup" backend=typeof(be) grid=(medium.nx, medium.nz) dt=dt nt=nt

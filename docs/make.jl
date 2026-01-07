@@ -15,6 +15,6 @@ makedocs(
 )
 
 deploydocs(
-    repo = "github.com/YOUR_USERNAME/Fomo.jl.git",
+    repo = "github.com/Wuheng10086/Fomo.jl.git",
     devbranch = "main",
 )

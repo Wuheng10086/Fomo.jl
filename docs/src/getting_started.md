@@ -4,7 +4,7 @@
 
 ```julia
 using Pkg
-Pkg.add(url="https://github.com/YOUR_USERNAME/Fomo.jl")
+Pkg.add(url="https://github.com/Wuheng10086/Fomo.jl")
 ```
 
 ## Basic Usage
@@ -47,4 +47,4 @@ medium = init_medium(model, nbc, fd_order, be; free_surface=true)
 
 ### 4. Run Simulation
 
-See [examples/basic_example.jl](https://github.com/YOUR_USERNAME/Fomo.jl/blob/main/examples/basic_example.jl) for a complete example.
+See [examples/basic_example.jl](https://github.com/Wuheng10086/Fomo.jl/blob/main/examples/basic_example.jl) for a complete example.

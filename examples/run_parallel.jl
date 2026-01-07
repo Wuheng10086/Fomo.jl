@@ -27,6 +27,9 @@ const CFL = 0.5f0
 # ==============================================================================
 
 function main(model_path::String; output_dir::String="outputs/")
+    # Get model name from path
+    model_name = splitext(basename(model_path))[1]
+    
     # Create output directory
     mkpath(output_dir)
     
@@ -59,19 +62,18 @@ function main(model_path::String; output_dir::String="outputs/")
     
     @info "Survey geometry" n_shots=length(src_x) n_receivers=length(rec_x)
     
-    # Plot setup check
+    # Plot setup check (output filename includes model name)
+    setup_plot_path = joinpath(output_dir, "$(model_name)_setup.png")
     plot_setup(model, src_x, src_z, rec_x, rec_z;
-               output=joinpath(output_dir, "setup_check.png"),
-               title="$(model.name) - Parallel Survey")
+               output=setup_plot_path,
+               title="$(model_name) - Survey Setup")
     
     println("\n" * "=" ^ 70)
-    println("  Ready to run $(length(src_x)) shots")
+    println("  Starting $(length(src_x)) shots")
     println("  Output directory: $output_dir")
-    println("=" ^ 70)
-    print("\nPress Enter to start, or Ctrl+C to cancel... ")
-    readline()
+    println("=" ^ 70 * "\n")
     
-    # Run with automatic parallelization
+    # Run with automatic parallelization (no confirmation needed)
     start_time = time()
     
     results = run_shots_auto!(
@@ -99,8 +101,8 @@ function main(model_path::String; output_dir::String="outputs/")
     be = is_cuda_available() ? backend(:cuda) : backend(:cpu)
     medium = init_medium(model, NBC, FD_ORDER, be; free_surface=true)
     geom = create_geometry(results, medium, params)
-    save_geometry(joinpath(output_dir, "geometry.jld2"), geom)
-    save_geometry(joinpath(output_dir, "geometry.json"), geom)
+    save_geometry(joinpath(output_dir, "$(model_name)_geometry.jld2"), geom)
+    save_geometry(joinpath(output_dir, "$(model_name)_geometry.json"), geom)
     
     @info "Done!" output_dir=output_dir
     

@@ -15,18 +15,19 @@ using Fomo
 
 println("Creating velocity model...")
 
-nx, nz = 200, 100      # Grid size
+nx, nz = 200, 100      # Grid size (nx: horizontal, nz: vertical)
 dx, dz = 10.0f0, 10.0f0  # Grid spacing (m)
 
 # Create velocity model (2 layers)
-vp = fill(2000.0f0, nx, nz)
-vs = fill(1200.0f0, nx, nz)
-rho = fill(2000.0f0, nx, nz)
+# Note: Data stored as [nz, nx] (depth first, seismic convention)
+vp = fill(2000.0f0, nz, nx)
+vs = fill(1200.0f0, nz, nx)
+rho = fill(2000.0f0, nz, nx)
 
-# Second layer (faster)
-vp[:, nz÷2:end] .= 3500.0f0
-vs[:, nz÷2:end] .= 2100.0f0
-rho[:, nz÷2:end] .= 2400.0f0
+# Second layer (faster) - lower half of model
+vp[nz÷2:end, :] .= 3500.0f0
+vs[nz÷2:end, :] .= 2100.0f0
+rho[nz÷2:end, :] .= 2400.0f0
 
 model = VelocityModel(vp, vs, rho, dx, dz; name="TwoLayer")
 model_info(model)
@@ -52,11 +53,11 @@ println("\nTime stepping: dt=$dt s, nt=$nt steps")
 # ==============================================================================
 
 # Source at center-top
-src_x = Float32[nx * dx / 2]
+src_x = Float32[model.nx * dx / 2]
 src_z = Float32[20.0]
 
 # Receivers across the surface
-rec_x = Float32.(range(0, (nx-1)*dx, step=20))
+rec_x = Float32.(range(0, (model.nx-1)*dx, step=20))
 rec_z = fill(10.0f0, length(rec_x))
 
 println("Sources: $(length(src_x)), Receivers: $(length(rec_x))")

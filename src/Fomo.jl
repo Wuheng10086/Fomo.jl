@@ -2,16 +2,6 @@
 # Fomo.jl - Forward Modeling
 #
 # High-Performance 2D Elastic Wave Simulation Framework
-#
-# Features:
-# - Backend-dispatched kernels (CPU/CUDA)
-# - High-order staggered-grid finite-difference
-# - Hybrid Absorbing Boundary Condition (HABC)
-# - Free surface modeling
-# - Multi-GPU parallel execution
-#
-# Author: zswh
-# License: MIT
 # ==============================================================================
 
 module Fomo
@@ -27,30 +17,26 @@ using Statistics
 using CairoMakie
 using JLD2
 using JSON
+using CUDA
 
-# CUDA support (conditional loading)
+# ==============================================================================
+# CUDA Support
+# ==============================================================================
+
+# Check if CUDA is functional (has GPU)
 const CUDA_AVAILABLE = Ref(false)
-const CUDA_FUNCTIONAL = Ref(false)
 
 function __init__()
-    # Try to check if CUDA is functional
-    try
-        @eval using CUDA
-        if CUDA.functional()
-            CUDA_AVAILABLE[] = true
-            CUDA_FUNCTIONAL[] = true
-            @info "CUDA available: GPU acceleration enabled"
-        else
-            CUDA_AVAILABLE[] = true
-            CUDA_FUNCTIONAL[] = false
-            @debug "CUDA loaded but not functional"
-        end
-    catch e
-        CUDA_AVAILABLE[] = false
-        CUDA_FUNCTIONAL[] = false
-        @debug "CUDA not available" exception=e
+    if CUDA.functional()
+        CUDA_AVAILABLE[] = true
+        @info "Fomo: CUDA functional, GPU acceleration enabled"
+    else
+        @info "Fomo: CUDA not functional (no GPU), using CPU mode"
     end
 end
+
+is_cuda_available() = CUDA_AVAILABLE[]
+is_cuda_functional() = CUDA_AVAILABLE[]
 
 # ==============================================================================
 # Exports
@@ -60,6 +46,7 @@ end
 export AbstractBackend, CPUBackend, CUDABackend
 export CPU_BACKEND, CUDA_BACKEND
 export backend, to_device, synchronize
+export is_cuda_available, is_cuda_functional
 
 # Data structures
 export Wavefield, Medium, HABCConfig
@@ -99,11 +86,6 @@ export VelocityModel, load_model, load_model_files, save_model, convert_model, m
 export SurveyGeometry, MultiShotGeometry
 export create_geometry, save_geometry, load_geometry
 
-# Utilities
-export is_cuda_available, is_cuda_functional
-is_cuda_available() = CUDA_AVAILABLE[]
-is_cuda_functional() = CUDA_FUNCTIONAL[]
-
 # ==============================================================================
 # Include Files (order matters!)
 # ==============================================================================
@@ -127,7 +109,7 @@ include("io/model_loader.jl")
 # Utilities (uses VelocityModel from model_loader.jl)
 include("utils/init.jl")
 
-# Geometry IO (uses ShotResult from shot_manager.jl)
+# Geometry IO (ShotResult is now in structures.jl)
 include("io/geometry_io.jl")
 
 # Simulation

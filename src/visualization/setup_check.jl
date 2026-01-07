@@ -6,40 +6,44 @@
 
 """
     plot_setup(model::VelocityModel, x_src, z_src, x_rec, z_rec; 
-               output="setup_check.png", title="Survey Setup")
+               output=nothing, title="Survey Setup")
 
 Plot Vp model with source and receiver positions for visual verification.
 
 # Arguments
-- `model`: VelocityModel struct
+- `model`: VelocityModel struct  
 - `x_src`, `z_src`: Source positions (meters)
 - `x_rec`, `z_rec`: Receiver positions (meters)
-- `output`: Output file path
+- `output`: Output file path (default: "\$(model.name)_setup.png")
 - `title`: Plot title
-
-# Example
-```julia
-model = load_model("marmousi.jld2")
-x_src = Float32.(100:200:3000)
-z_src = fill(10.0f0, length(x_src))
-x_rec = Float32.(0:15:3500)
-z_rec = fill(50.0f0, length(x_rec))
-
-plot_setup(model, x_src, z_src, x_rec, z_rec)
-```
 """
 function plot_setup(model::VelocityModel, 
                     x_src::AbstractVector, z_src::AbstractVector,
                     x_rec::AbstractVector, z_rec::AbstractVector;
-                    output::String="setup_check.png",
+                    output::Union{String, Nothing}=nothing,
                     title::String="Survey Setup Check")
     
     nx, nz = model.nx, model.nz
+    
+    # Default output filename includes model name
+    if output === nothing
+        output = "$(model.name)_setup.png"
+    end
+    
     x_axis = range(0, (nx-1) * model.dx, length=nx)
     z_axis = range(0, (nz-1) * model.dz, length=nz)
     
+    # Figure size based on aspect ratio
+    x_extent = (nx - 1) * model.dx
+    z_extent = (nz - 1) * model.dz
+    aspect = x_extent / z_extent
+    
+    # Reasonable figure size
+    fig_width = min(1600, max(800, round(Int, 600 * aspect)))
+    fig_height = 700
+    
     # Create figure
-    fig = Figure(size=(1200, 600), fontsize=14)
+    fig = Figure(size=(fig_width, fig_height), fontsize=14)
     
     # Main plot - Vp model with geometry
     ax1 = Axis(fig[1, 1],
@@ -49,7 +53,8 @@ function plot_setup(model::VelocityModel,
         aspect = DataAspect()
     )
     
-    # Plot Vp model (note: heatmap expects data[x, z] but displays z on y-axis)
+    # Plot Vp model
+    # vp is stored as [nz, nx], transpose to [nx, nz] for heatmap
     hm = heatmap!(ax1, x_axis, z_axis, model.vp',
                   colormap = :viridis)
     
@@ -81,9 +86,9 @@ function plot_setup(model::VelocityModel,
     # Info text
     info_text = """
     Model: $(model.name)
-    Grid: $(nx) × $(nz)
+    Grid: $(nx) × $(nz) (nx × nz)
     Spacing: dx=$(model.dx)m, dz=$(model.dz)m
-    Size: $(round((nx-1)*model.dx/1000, digits=2))km × $(round((nz-1)*model.dz/1000, digits=2))km
+    Size: $(round(x_extent/1000, digits=2))km × $(round(z_extent/1000, digits=2))km
     Vp range: $(round(minimum(model.vp), digits=0)) - $(round(maximum(model.vp), digits=0)) m/s
     Sources: $(length(x_src)), Receivers: $(length(x_rec))
     """
@@ -100,9 +105,9 @@ function plot_setup(model::VelocityModel,
     println("  SETUP CHECK")
     println("=" ^ 60)
     println("  Model:     $(model.name)")
-    println("  Grid:      $(nx) × $(nz)")
-    println("  X extent:  0 - $((nx-1)*model.dx) m ($(round((nx-1)*model.dx/1000, digits=2)) km)")
-    println("  Z extent:  0 - $((nz-1)*model.dz) m ($(round((nz-1)*model.dz/1000, digits=2)) km)")
+    println("  Grid:      $(nx) × $(nz) (nx × nz)")
+    println("  X extent:  0 - $(x_extent) m ($(round(x_extent/1000, digits=2)) km)")
+    println("  Z extent:  0 - $(z_extent) m ($(round(z_extent/1000, digits=2)) km)")
     println("  Vp range:  $(minimum(model.vp)) - $(maximum(model.vp)) m/s")
     println("-" ^ 60)
     println("  Sources:   $(length(x_src))")
@@ -113,7 +118,6 @@ function plot_setup(model::VelocityModel,
     println("    Z range: $(minimum(z_rec)) - $(maximum(z_rec)) m")
     println("=" ^ 60)
     println("  Plot saved to: $output")
-    println("  Please check the plot before running simulation!")
     println("=" ^ 60)
     
     return fig

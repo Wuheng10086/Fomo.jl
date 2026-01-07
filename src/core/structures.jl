@@ -46,6 +46,9 @@ function Wavefield(nx::Int, nz::Int, b::CPUBackend)
 end
 
 function Wavefield(nx::Int, nz::Int, b::CUDABackend)
+    if !CUDA_AVAILABLE[]
+        error("CUDA not functional (no GPU available)")
+    end
     return Wavefield(
         CUDA.zeros(Float32, nx, nz), CUDA.zeros(Float32, nx, nz),
         CUDA.zeros(Float32, nx, nz), CUDA.zeros(Float32, nx, nz), CUDA.zeros(Float32, nx, nz),
@@ -152,4 +155,27 @@ end
 function SimParams(dt, nt, dx, dz, fd_order)
     M = fd_order ÷ 2
     SimParams(Float32(dt), nt, Float32(dt/dx), Float32(dt/dz), fd_order, M)
+end
+
+# ==============================================================================
+# Shot Result
+# ==============================================================================
+
+"""
+    ShotResult
+
+Result from a single shot simulation.
+Contains gather data and geometry information for migration.
+"""
+struct ShotResult
+    gather::Matrix{Float32}   # [nt × n_rec] - always on CPU
+    shot_id::Int
+    
+    # Source position (grid indices)
+    src_i::Int
+    src_j::Int
+    
+    # Receiver positions (grid indices)
+    rec_i::Vector{Int}
+    rec_j::Vector{Int}
 end

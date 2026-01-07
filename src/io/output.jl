@@ -4,8 +4,6 @@
 # Output utilities
 # ==============================================================================
 
-using CairoMakie
-
 """
     save_gather(result::ShotResult, path::String; format=:bin)
 

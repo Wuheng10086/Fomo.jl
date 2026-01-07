@@ -72,7 +72,13 @@ function init_medium(vp::Matrix, vs::Matrix, rho::Matrix,
     M = fd_order ÷ 2
     pad = nbc + M
     
-    nx_inner, nz_inner = size(vp)
+    # Input data is [nz, nx] (seismic convention)
+    # Transpose to [nx, nz] for simulation (better cache performance)
+    vp_t = permutedims(vp)
+    vs_t = permutedims(vs)
+    rho_t = permutedims(rho)
+    
+    nx_inner, nz_inner = size(vp_t)
     nx = nx_inner + 2 * pad
     nz = nz_inner + 2 * pad
     
@@ -80,9 +86,9 @@ function init_medium(vp::Matrix, vs::Matrix, rho::Matrix,
     z_max = Float32((nz_inner - 1) * dz)
     
     # Pad and compute staggered parameters
-    vp_pad = _pad_array(vp, pad)
-    vs_pad = _pad_array(vs, pad)
-    rho_pad = _pad_array(rho, pad)
+    vp_pad = _pad_array(vp_t, pad)
+    vs_pad = _pad_array(vs_t, pad)
+    rho_pad = _pad_array(rho_t, pad)
     
     lam, mu_txx, mu_txz, rho_vx, rho_vz = _compute_staggered_params(vp_pad, vs_pad, rho_pad)
     

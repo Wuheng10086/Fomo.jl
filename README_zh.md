@@ -1,43 +1,114 @@
-# Fomo_julia: 高阶弹性波有限差分数值模拟器
+# Fomo.jl
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Julia](https://img.shields.io/badge/Julia-1.9%20|%201.10%20|%201.11-blue)](https://julialang.org/)
 
 [中文文档](README_zh.md) | [English](README.md)
 
-**Fomo_julia** 是一个基于 Julia 语言开发的高性能二维各向同性弹性波数值模拟器。它采用空间高阶交错网格有限差分方案，并集成了先进的混合吸收边界条件（HABC）。
+**Fomo** - **Fo**rward **Mo**deling：高性能二维各向同性弹性波数值模拟器。
 
-![Simulation Example](homogeneous_test.gif)
+## ✨ 特性
 
-## ✨ 核心特性
+- 🚀 **后端调度架构** - 一套代码，CPU/GPU 自动切换
+- 📐 **高阶交错网格有限差分** - 支持 2 至 8 阶空间精度
+- 🛡️ **混合吸收边界 (HABC)** - 有效抑制边界反射
+- 🌊 **自由地表建模** - 准确模拟 Rayleigh 面波
+- ⚡ **多 GPU 并行** - 自动负载均衡，榨干显卡性能
+- 📁 **多格式支持** - SEG-Y、Binary、MAT、NPY、HDF5、JLD2
+- 🎬 **视频录制** - 实时波场可视化
 
-* **Backend 调度架构**：模拟逻辑**只写一遍**，CPU/GPU 切换只需改一行代码。
-* **高阶交错网格 (SGFD)**：基于 Luo & Schuster (1990) 的原理，实现速度-应力场的空间交错采样，支持 **2M 阶** 空间精度。
-* **混合吸收边界 (HABC)**：参考 Liu & Sen (2012) 的方案，通过单程波外推与空间权重融合，有效抑制人工边界反射。
-* **自由表面模拟**：支持顶部自由表面边界条件，可精确模拟地表面波（Rayleigh waves）。
-* **多格式模型 I/O**：统一加载器支持 SEG-Y、Binary、MAT、NPY、HDF5 格式，自动识别格式。
-* **观测系统导出**：导出实际离散化后的震源/检波器坐标，便于偏移处理。
-* **多波场视频录制**：流式视频导出，支持压力、速度幅值、vx、vz 波场。
-* **CUDA 加速**：针对大规模模型性能提升显著。
+## 📋 系统要求
 
----
+- **Julia 1.9、1.10 或 1.11**（暂不支持 1.12，CairoMakie 兼容性问题）
+- CUDA 显卡（可选，用于 GPU 加速）
 
-## 🎯 v2 新特性
+## 🔧 安装
 
-### 统一的 Backend 架构
+### 从 GitHub 安装
+
 ```julia
-# CPU/GPU 切换 - 只需改这一行！
-const BACKEND = backend(:cpu)   # CPU + SIMD
-const BACKEND = backend(:cuda)  # GPU 加速
-
-# 后续代码完全相同
-medium = init_medium(vp, vs, rho, dx, dz, nbc, fd_order, BACKEND)
-run_shots!(BACKEND, wavefield, medium, ...)
+using Pkg
+Pkg.add(url="https://github.com/Wuheng10086/Fomo.jl")
 ```
 
-### 智能模型加载器
+### 本地开发
+
+```bash
+git clone https://github.com/Wuheng10086/Fomo.jl.git
+cd Fomo.jl
+julia --project=. -e "using Pkg; Pkg.instantiate()"
+```
+
+### 可选依赖
+
+读取不同格式的模型文件：
+
 ```julia
-# 从单个 JLD2 文件加载（最快，推荐）
+using Pkg
+Pkg.add("SegyIO")  # SEG-Y 文件
+Pkg.add("MAT")     # MATLAB 文件  
+Pkg.add("NPZ")     # NumPy 文件
+Pkg.add("HDF5")    # HDF5 文件
+```
+
+## 🚀 快速开始
+
+```julia
+using Fomo
+
+# 创建速度模型
+vp = fill(3000.0f0, 200, 100)
+vs = fill(1800.0f0, 200, 100)
+rho = fill(2200.0f0, 200, 100)
+
+# 添加一个层
+vp[:, 50:end] .= 4000.0f0
+vs[:, 50:end] .= 2400.0f0
+
+model = VelocityModel(vp, vs, rho, 10.0f0, 10.0f0; name="双层模型")
+
+# 自动选择后端（有 GPU 就用 GPU）
+be = is_cuda_available() ? backend(:cuda) : backend(:cpu)
+
+# 初始化模拟
+nbc, fd_order = 50, 8
+medium = init_medium(model, nbc, fd_order, be; free_surface=true)
+
+# 时间步进
+dt = 0.5f0 * 10.0f0 / maximum(vp)
+nt = 2000
+habc = init_habc(medium.nx, medium.nz, nbc, dt, 10.0f0, 10.0f0, 3500.0f0, be)
+params = SimParams(dt, nt, 10.0f0, 10.0f0, fd_order)
+
+# 观测系统
+rec_x = Float32.(0:20:1990)
+rec_z = fill(10.0f0, length(rec_x))
+rec = setup_receivers(rec_x, rec_z, medium; type=:vz)
+
+src_x = Float32[1000.0]
+src_z = Float32[20.0]
+wavelet = ricker_wavelet(15.0f0, dt, nt)
+shots = MultiShotConfig(src_x, src_z, wavelet)
+
+# 运行模拟
+fd_coeffs = to_device(get_fd_coefficients(fd_order), be)
+wavefield = Wavefield(medium.nx, medium.nz, be)
+results = run_shots!(be, wavefield, medium, habc, fd_coeffs, rec, shots, params)
+
+# 保存结果
+save_gather(results[1], "gather.bin")
+```
+
+## 📁 加载模型
+
+```julia
+using Fomo
+
+# 从 JLD2 加载（推荐）
 model = load_model("marmousi.jld2")
 
-# 从分开的 Vp/Vs/Rho 文件加载（常见工作流）
+# 从分离的 SEG-Y 文件加载（需要 SegyIO）
+using SegyIO
 model = load_model_files(
     vp = "vp.segy",
     vs = "vs.segy", 
@@ -45,264 +116,142 @@ model = load_model_files(
     dx = 12.5
 )
 
-# Binary 文件（需要指定维度）
-model = load_model_files(
-    vp = "vp.bin",
-    vs = "vs.bin",
-    rho = "rho.bin",
-    dx = 10.0, nx = 500, nz = 200
+# 保存为 JLD2 格式，下次加载更快
+save_model("model.jld2", model)
+```
+
+## ⚡ 多 GPU 并行
+
+```julia
+using Fomo
+
+model = load_model("marmousi.jld2")
+
+# 定义观测系统
+src_x = Float32.(100:200:16900)
+src_z = fill(10.0f0, length(src_x))
+rec_x = Float32.(0:15:17000)
+rec_z = fill(20.0f0, length(rec_x))
+
+wavelet = ricker_wavelet(25.0f0, dt, nt)
+params = SimParams(dt, nt, model.dx, model.dz, 8)
+
+# 自动使用所有可用 GPU！
+results = run_shots_auto!(
+    model, rec_x, rec_z, src_x, src_z, wavelet, params;
+    nbc=50, fd_order=8, output_dir="outputs/"
+)
+```
+
+## 🔍 设置验证
+
+运行大规模模拟前，先检查观测系统设置：
+
+```julia
+using Fomo
+
+model = load_model("model.jld2")
+
+# 定义震源和检波器
+src_x = Float32.(100:200:3000)
+src_z = fill(10.0f0, length(src_x))
+rec_x = Float32.(0:15:3500)
+rec_z = fill(50.0f0, length(rec_x))
+
+# 生成设置检查图
+plot_setup(model, src_x, src_z, rec_x, rec_z; 
+           output="setup_check.png",
+           title="观测系统设置")
+```
+
+## 🎬 视频录制
+
+```julia
+using Fomo
+
+# 配置视频录制
+config = VideoConfig(
+    fields = [:p],      # 录制压力场
+    skip = 10,          # 每 10 步保存一帧
+    downsample = 2      # 空间降采样
 )
 
-# 只有 Vp（Vs 和 Rho 会自动估算）
-model = load_model_files(vp="vp.segy", dx=10.0)
+recorder = MultiFieldRecorder(medium.nx, medium.nz, dt, config)
 
-# 直接用于模拟
-medium = init_medium(model, nbc, fd_order, BACKEND)
+# 带录制回调运行
+results = run_shots!(be, wavefield, medium, habc, fd_coeffs,
+                     rec, shots, params;
+                     on_step = recorder)
+
+# 生成 MP4 视频
+generate_video(recorder.recorder, "wavefield.mp4"; fps=30)
 ```
 
-### 观测系统坐标导出（用于偏移）
-```julia
-# 模拟后导出实际离散化位置
-results = run_shots!(...)
-geom = create_geometry(results, medium, params)
-
-# 保存为多种格式
-save_geometry("survey.jld2", geom)   # Julia
-save_geometry("survey.json", geom)   # Python/其他语言
-save_geometry("survey.txt", geom)    # 人类可读
-```
-
-### 加载模拟结果（用于后处理）
-```julia
-# 加载观测系统和炮集，用于偏移
-geom = load_geometry("survey.jld2")
-gather = load_gather("shot_1.bin", geom.shots[1])
-
-# 访问实际离散化位置
-geom.shots[1].src_x        # 震源 X（米）
-geom.shots[1].src_i        # 震源网格索引
-geom.shots[1].rec_x        # 检波器 X 位置
-geom.shots[1].rec_i_idx    # 检波器网格索引
-```
-
----
-
-## 🚀 性能说明
-
-**任务参数（SEAM 模型）**：  
-网格大小：nx = 4444, nz = 3819  
-时间步数：11520  
-
-| 运行模式 | 命令 | 用时（单炮）|
-| :--- | :--- | :--- |
-| **CPU** | `julia -t auto run.jl` | ≈ 35 min |
-| **CUDA** | `julia run.jl`（使用 `:cuda`）| **< 3 min**（RTX 3060 12GB）|
-
----
-
-## 📐 坐标系统与网格布局
-
-**坐标约定**：
-- **X**：水平方向
-- **Z**：深度方向，**z=0 为地表（上边界）**
-
-**交错网格布局**（单个网格单元内）：
-
-| 物理量 | 偏移位置 | 说明 |
-| :--- | :--- | :--- |
-| `vx`, `rho_vx` | (0, 0) | 水平速度与浮力 |
-| `txx`, `tzz`, `lam`, `mu_txx` | (0.5, 0) | 正应力与拉梅参数 |
-| `txz`, `mu_txz` | (0, 0.5) | 剪应力与剪切模量 |
-| `vz`, `rho_vz` | (0.5, 0.5) | 垂直速度与浮力 |
-
----
-
-## 📦 安装指南
+## 🛠️ 命令行工具
 
 ```bash
-git clone https://github.com/Wuheng10086/Fomo_julia.git
-cd Fomo_julia
-julia --project=. -e 'using Pkg; Pkg.instantiate()'
+# 转换模型格式
+julia --project=. scripts/convert_model.jl \
+    --vp=vp.segy --vs=vs.segy --rho=rho.segy \
+    -o model.jld2 --dx=12.5 --transpose
+
+# 检查模型维度
+julia --project=. scripts/check_model.jl model.jld2 --fix
+
+# 运行并行模拟
+julia --project=. examples/run_parallel.jl model.jld2 outputs/
 ```
-
----
-
-## 🏃 快速开始
-
-### 运行模拟
-```bash
-# 使用合成模型
-julia -t auto run.jl
-
-# 使用模型文件
-julia -t auto run.jl path/to/model.jld2
-```
-
-### 转换模型格式
-```bash
-# 三个 SEG-Y 文件
-julia scripts/convert_model.jl --vp=vp.segy --vs=vs.segy --rho=rho.segy \
-      -o model.jld2 --dx=12.5
-
-# 三个 Binary 文件
-julia scripts/convert_model.jl --vp=vp.bin --vs=vs.bin --rho=rho.bin \
-      -o model.jld2 --dx=10 --nx=500 --nz=200
-
-# 只有 Vp（Vs 和 Rho 自动估算）
-julia scripts/convert_model.jl --vp=vp.segy -o model.jld2 --dx=10
-```
-
-### 加载模拟结果
-```bash
-# 查看观测系统信息
-julia scripts/load_results.jl survey_geometry.jld2
-
-# 加载观测系统 + 炮集并画图
-julia scripts/load_results.jl survey_geometry.jld2 shot_1.bin shot_2.bin --plot
-```
-
----
 
 ## 📂 项目结构
 
 ```
-Fomo_julia/
-├── run.jl                         # 主入口
-├── scripts/
-│   ├── convert_model.jl           # 模型格式转换
-│   ├── load_results.jl            # 加载观测系统和炮集
-│   └── plot_gather.jl             # 炮集可视化
-└── src/
-    ├── Fomo.jl               # 主模块
-    ├── backends/
-    │   └── backend.jl             # CPU/GPU 后端抽象
-    ├── core/
-    │   └── structures.jl          # 参数化数据结构
-    ├── kernels/                   # 计算核心
-    │   ├── velocity.jl            # 速度更新 (CPU + GPU)
-    │   ├── stress.jl              # 应力更新 (CPU + GPU)
-    │   ├── boundary.jl            # HABC + 自由表面
-    │   └── source_receiver.jl     # 震源注入与接收
-    ├── simulation/
-    │   ├── time_stepper.jl        # 时间步进 + 回调
-    │   └── shot_manager.jl        # 多炮管理
-    ├── io/
-    │   ├── output.jl              # 炮集 I/O
-    │   ├── model_loader.jl        # 多格式模型加载器
-    │   └── geometry_io.jl         # 观测系统坐标导出
-    ├── visualization/
-    │   └── video_recorder.jl      # 流式视频录制
-    └── utils/
-        └── init.jl                # 初始化工具
+Fomo.jl/
+├── src/
+│   ├── Fomo.jl              # 主模块
+│   ├── backends/            # CPU/CUDA 抽象层
+│   ├── kernels/             # 有限差分核函数
+│   ├── simulation/          # 炮管理
+│   ├── io/                  # 模型/观测系统 I/O
+│   └── visualization/       # 绑图 & 视频
+├── examples/                # 使用示例
+├── scripts/                 # 命令行工具
+├── test/                    # 单元测试
+└── docs/                    # 文档
 ```
 
----
+## 🧪 运行测试
 
-## 📁 支持的模型格式
-
-| 格式 | 扩展名 | 必需参数 |
-| :--- | :--- | :--- |
-| **JLD2**（推荐） | `.jld2` | 无 |
-| SEG-Y | `.segy`, `.sgy` | `dx` |
-| Binary | `.bin` | `nx`, `nz`, `dx` |
-| MATLAB | `.mat` | `dx` |
-| NumPy | `.npy` | `dx` |
-| HDF5 | `.h5`, `.hdf5` | `dx` |
-
-**建议**：将所有模型转换为 JLD2 格式，之后使用无需任何参数！
-
----
-
-## 📤 观测系统输出
-
-观测系统导出包含**实际离散化位置**（不是原始输入值）：
-
-```
-# 示例输出 (survey.txt)
-# 震源（实际离散化位置）
-src_x        500.0000    # 米（由 502.3 离散化得到）
-src_z        50.0000     # 米
-src_i        50          # 网格索引（0-based）
-src_j        5           # 网格索引（0-based）
-
-# 检波器（实际离散化位置）
-# rec_id    x(m)         z(m)      i_idx   j_idx
-     1      100.0000     10.0000      10       1
-     2      110.0000     10.0000      11       1
-```
-
-这确保你的偏移代码使用的是数据**真正记录位置**的坐标。
-
----
-
-## 📥 加载模拟结果
-
-使用 `scripts/load_results.jl` 或直接调用模块函数：
-
-```julia
-using .Fomo
-
-# 加载观测系统
-geom = load_geometry("survey_geometry.jld2")
-
-# 用观测系统加载炮集（自动获取 nt, n_rec）
-gather = load_gather("shot_1.bin", geom.shots[1])
-
-# 多炮数据处理
-for (i, shot) in enumerate(geom.shots)
-    g = load_gather("shot_$i.bin", shot)
-    println("Shot $(shot.shot_id): src=($(shot.src_x), $(shot.src_z))")
-end
-```
-
-命令行：
 ```bash
-julia scripts/load_results.jl survey.jld2 shot_1.bin shot_2.bin --plot
+cd Fomo.jl
+julia --project=. -e "using Pkg; Pkg.test()"
 ```
 
-输出示例：
-```
-============================================================
-  Multi-Shot Survey Geometry
-============================================================
-  Survey Overview:
-    Number of shots: 10
-    Source X range:  500.00 - 3500.00 m
+## 📚 API 概览
 
-  Receivers (per shot): 100
-    X range:   100.00 - 3900.00 m
+### 核心类型
+- `VelocityModel` - 速度模型容器
+- `Medium` - 计算网格与材料属性
+- `Wavefield` - 波场数组 (vx, vz, txx, tzz, txz)
+- `SimParams` - 模拟参数
 
-  Shot List:
-  --------------------------------------------------------
-      ID     src_x(m)     src_z(m)   src_i   src_j   n_rec
-  --------------------------------------------------------
-       1       500.00        50.00      50       5     100
-       2       833.33        50.00      83       5     100
-```
+### 主要函数
+- `init_medium()` - 初始化计算介质
+- `init_habc()` - 初始化吸收边界
+- `run_shots!()` - 顺序执行多炮
+- `run_shots_auto!()` - 自动多 GPU 并行
+- `load_model()` / `save_model()` - 模型读写
+- `plot_setup()` - 可视化观测系统
 
----
+## 📖 参考文献
 
-## 📚 学术参考
+1. Luo, Y., & Schuster, G. (1990). *Parsimonious staggered grid finite-differencing of the wave equation*. Geophysical Research Letters.
 
-1. **交错网格原理**：  
-   Luo, Y., & Schuster, G. (1990). *Parsimonious staggered grid finite-differencing of the wave equation*. Geophysical Research Letters, 17(2), 155-158.
-
-2. **混合吸收边界条件 (HABC)**：  
-   Liu, Y., & Sen, M. K. (2012). *A hybrid absorbing boundary condition for elastic staggered-grid modelling*. Geophysical Prospecting, 60(6), 1114-1132.
-
----
-
-## 🤝 贡献与反馈
-
-欢迎通过 GitHub 的 Issue 或 Pull Request 提供改进建议、报告 Bug 或分享您的模拟案例。
+2. Liu, Y., & Sen, M. K. (2012). *A hybrid absorbing boundary condition for elastic staggered-grid modelling*. Geophysical Prospecting.
 
 ## 📄 许可证
 
-本项目采用 [MIT License](LICENSE) 开源许可证。
+MIT License - 详见 [LICENSE](LICENSE)
 
----
+## 👤 作者
 
-**碎碎念**：谢谢老师们的指导和鼓励！  
-*zswh 2025.01*
-
-**关于名称**：**Fomo** = **FO**rward **MO**deling。虽然作者曾把它和 Fumo 玩偶记混，但这个美丽的误会给项目增添了一些趣味。🎎
+zswh - 2025
