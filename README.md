@@ -3,6 +3,10 @@
 [![Build Status](https://github.com/YOUR_USERNAME/Fomo.jl/workflows/CI/badge.svg)](https://github.com/YOUR_USERNAME/Fomo.jl/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
+
+https://github.com/user-attachments/assets/7218719c-b911-44ef-8ab5-153f242558f0
+
+
 [中文文档](README_zh.md) | [English](README.md)
 
 **Fomo** - **Fo**rward **Mo**deling: High-performance 2D isotropic elastic wave numerical simulator in Julia.
