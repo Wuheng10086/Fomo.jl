@@ -1,8 +1,8 @@
 # ==============================================================================
-# core/structures.jl
+# core/structures.jl (OPTIMIZED)
 #
 # Unified data structures using parametric types
-# Same struct works for both CPU (Array) and GPU (CuArray)
+# OPTIMIZATION: Added precomputed buoyancy (1/rho) and lam_2mu fields
 # ==============================================================================
 
 # ==============================================================================
@@ -58,13 +58,15 @@ function Wavefield(nx::Int, nz::Int, b::CUDABackend)
 end
 
 # ==============================================================================
-# Medium - Parametric over array type
+# Medium - OPTIMIZED with precomputed buoyancy and lam_2mu
 # ==============================================================================
 
 """
     Medium{T}
 
 Physical properties of the simulation domain.
+OPTIMIZATION: Includes precomputed buoyancy (1/rho) and lam_2mu (lambda + 2*mu)
+              to eliminate expensive divisions in the simulation loop.
 """
 struct Medium{T<:AbstractMatrix{Float32}}
     nx::Int
@@ -77,12 +79,15 @@ struct Medium{T<:AbstractMatrix{Float32}}
     pad::Int            # Boundary padding
     is_free_surface::Bool
     
-    # Material properties
-    rho_vx::T
-    rho_vz::T
-    lam::T
-    mu_txx::T
-    mu_txz::T
+    # Original material properties
+    lam::T              # Lambda (Lamé's first parameter)
+    mu_txx::T           # Mu at txx/tzz positions
+    mu_txz::T           # Mu at txz positions (harmonic average)
+    
+    # OPTIMIZED: Precomputed values to eliminate divisions in hot loops
+    buoy_vx::T          # 1/rho at vx positions (buoyancy)
+    buoy_vz::T          # 1/rho at vz positions (buoyancy)
+    lam_2mu::T          # lambda + 2*mu (precomputed)
 end
 
 # ==============================================================================
