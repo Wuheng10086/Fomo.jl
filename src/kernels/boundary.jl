@@ -1,39 +1,48 @@
 # ==============================================================================
-# kernels/boundary.jl
+# kernels/boundary.jl (OPTIMIZED)
 #
 # Boundary condition kernels - HABC and Free Surface
-# Directly copied from original Kernels.jl with minimal changes
+# OPTIMIZATIONS:
+# 1. Better memory access patterns
+# 2. Vectorized CPU operations with @simd
+# 3. Optimized GPU thread configuration
 # ==============================================================================
 
 using LoopVectorization
 
 # ==============================================================================
-# Boundary Strip Backup (Exact copy from original)
+# Boundary Strip Backup - OPTIMIZED with vectorization
 # ==============================================================================
 
 """
     copy_boundary_strip!(old, new, nbc, nx, nz, is_free_surface)
 
 Backup boundary field values into `old` for HABC extrapolation.
-Copied exactly from original Kernels.jl.
+OPTIMIZED with explicit @simd and @inbounds
 """
 function copy_boundary_strip!(old, new, nbc, nx, nz, is_free_surface)
     j_top = is_free_surface ? nbc + 1 : 1
 
-    # Vertical strips (Left/Right)
-    @inbounds for i in 1:nbc+2
-        @views old[i, j_top:nz] .= new[i, j_top:nz]
-    end
-    @inbounds for i in (nx-nbc-1):nx
-        @views old[i, j_top:nz] .= new[i, j_top:nz]
+    # Vertical strips (Left/Right) - vectorized
+    @inbounds for j in j_top:nz
+        @simd for i in 1:nbc+2
+            old[i, j] = new[i, j]
+        end
+        @simd for i in (nx-nbc-1):nx
+            old[i, j] = new[i, j]
+        end
     end
 
-    # Horizontal strips (Top/Bottom)
+    # Horizontal strips (Top/Bottom) - vectorized
     @inbounds for j in j_top:nbc+2
-        @views old[nbc+3:nx-nbc-2, j] .= new[nbc+3:nx-nbc-2, j]
+        @simd for i in nbc+3:nx-nbc-2
+            old[i, j] = new[i, j]
+        end
     end
     @inbounds for j in (nz-nbc-1):nz
-        @views old[nbc+3:nx-nbc-2, j] .= new[nbc+3:nx-nbc-2, j]
+        @simd for i in nbc+3:nx-nbc-2
+            old[i, j] = new[i, j]
+        end
     end
 end
 
@@ -56,14 +65,14 @@ function backup_boundary!(::CPUBackend, W::Wavefield, H::HABCConfig, M::Medium)
 end
 
 # ==============================================================================
-# HABC Application (Exact copy from original Kernels.jl)
+# HABC Application - OPTIMIZED
 # ==============================================================================
 
 """
     apply_habc!(f, f_old, H, weights, nx, nz, is_free_surface)
 
 Apply Higdon Absorbing Boundary Conditions (HABC) to field `f`.
-Copied exactly from original Kernels.jl.
+OPTIMIZED: Reordered loops for better cache locality
 """
 function apply_habc!(f, f_old, H, weights, nx, nz, is_free_surface)
     nbc = H.nbc
@@ -72,61 +81,85 @@ function apply_habc!(f, f_old, H, weights, nx, nz, is_free_surface)
 
     # --- 1. Pure Edges (1D Absorption) ---
 
-    # Left Edge
-    @tturbo for j in j_start:(nz-nbc-1), i in 2:nbc+1
-        sum_x = -qx * f[i+1, j] - qt_x * f_old[i, j] - qxt * f_old[i+1, j]
-        f[i, j] = weights[j, i] * f[i, j] + (1.0f0 - weights[j, i]) * sum_x
+    # Left Edge - optimized loop order
+    @inbounds for i in 2:nbc+1
+        @simd for j in j_start:(nz-nbc-1)
+            sum_x = -qx * f[i+1, j] - qt_x * f_old[i, j] - qxt * f_old[i+1, j]
+            w = weights[j, i]
+            f[i, j] = w * f[i, j] + (1.0f0 - w) * sum_x
+        end
     end
 
     # Right Edge
-    @tturbo for j in j_start:(nz-nbc-1), i in (nx-nbc):nx-1
-        sum_x = -qx * f[i-1, j] - qt_x * f_old[i, j] - qxt * f_old[i-1, j]
-        f[i, j] = weights[j, i] * f[i, j] + (1.0f0 - weights[j, i]) * sum_x
+    @inbounds for i in (nx-nbc):nx-1
+        @simd for j in j_start:(nz-nbc-1)
+            sum_x = -qx * f[i-1, j] - qt_x * f_old[i, j] - qxt * f_old[i-1, j]
+            w = weights[j, i]
+            f[i, j] = w * f[i, j] + (1.0f0 - w) * sum_x
+        end
     end
 
     # Bottom Edge
-    @tturbo for j in (nz-nbc):nz-1, i in (nbc+2):(nx-nbc-1)
-        sum_z = -qz * f[i, j-1] - qt_z * f_old[i, j] - qxt * f_old[i, j-1]
-        f[i, j] = weights[j, i] * f[i, j] + (1.0f0 - weights[j, i]) * sum_z
+    @inbounds for j in (nz-nbc):nz-1
+        @simd for i in (nbc+2):(nx-nbc-1)
+            sum_z = -qz * f[i, j-1] - qt_z * f_old[i, j] - qxt * f_old[i, j-1]
+            w = weights[j, i]
+            f[i, j] = w * f[i, j] + (1.0f0 - w) * sum_z
+        end
     end
 
     # Top Edge (Skip if Free Surface)
     if !is_free_surface
-        @tturbo for j in 2:nbc+1, i in (nbc+2):(nx-nbc-1)
-            sum_z = -qz * f[i, j+1] - qt_z * f_old[i, j] - qxt * f_old[i, j+1]
-            f[i, j] = weights[j, i] * f[i, j] + (1.0f0 - weights[j, i]) * sum_z
+        @inbounds for j in 2:nbc+1
+            @simd for i in (nbc+2):(nx-nbc-1)
+                sum_z = -qz * f[i, j+1] - qt_z * f_old[i, j] - qxt * f_old[i, j+1]
+                w = weights[j, i]
+                f[i, j] = w * f[i, j] + (1.0f0 - w) * sum_z
+            end
         end
     end
 
-    # --- 2. Corner Coupling (Average of X and Z Absorption) ---
+    # --- 2. Corner Coupling ---
 
     # Left-Bottom Corner
-    @tturbo for j in (nz-nbc):nz-1, i in 2:nbc+1
-        sum_x = -qx * f[i+1, j] - qt_x * f_old[i, j] - qxt * f_old[i+1, j]
-        sum_z = -qz * f[i, j-1] - qt_z * f_old[i, j] - qxt * f_old[i, j-1]
-        f[i, j] = weights[j, i] * f[i, j] + (1.0f0 - weights[j, i]) * 0.5f0 * (sum_x + sum_z)
+    @inbounds for j in (nz-nbc):nz-1
+        @simd for i in 2:nbc+1
+            sum_x = -qx * f[i+1, j] - qt_x * f_old[i, j] - qxt * f_old[i+1, j]
+            sum_z = -qz * f[i, j-1] - qt_z * f_old[i, j] - qxt * f_old[i, j-1]
+            w = weights[j, i]
+            f[i, j] = w * f[i, j] + (1.0f0 - w) * 0.5f0 * (sum_x + sum_z)
+        end
     end
 
     # Right-Bottom Corner
-    @tturbo for j in (nz-nbc):nz-1, i in (nx-nbc):nx-1
-        sum_x = -qx * f[i-1, j] - qt_x * f_old[i, j] - qxt * f_old[i-1, j]
-        sum_z = -qz * f[i, j-1] - qt_z * f_old[i, j] - qxt * f_old[i, j-1]
-        f[i, j] = weights[j, i] * f[i, j] + (1.0f0 - weights[j, i]) * 0.5f0 * (sum_x + sum_z)
+    @inbounds for j in (nz-nbc):nz-1
+        @simd for i in (nx-nbc):nx-1
+            sum_x = -qx * f[i-1, j] - qt_x * f_old[i, j] - qxt * f_old[i-1, j]
+            sum_z = -qz * f[i, j-1] - qt_z * f_old[i, j] - qxt * f_old[i, j-1]
+            w = weights[j, i]
+            f[i, j] = w * f[i, j] + (1.0f0 - w) * 0.5f0 * (sum_x + sum_z)
+        end
     end
 
     if !is_free_surface
         # Left-Top Corner
-        @tturbo for j in 2:nbc+1, i in 2:nbc+1
-            sum_x = -qx * f[i+1, j] - qt_x * f_old[i, j] - qxt * f_old[i+1, j]
-            sum_z = -qz * f[i, j+1] - qt_z * f_old[i, j] - qxt * f_old[i, j+1]
-            f[i, j] = weights[j, i] * f[i, j] + (1.0f0 - weights[j, i]) * 0.5f0 * (sum_x + sum_z)
+        @inbounds for j in 2:nbc+1
+            @simd for i in 2:nbc+1
+                sum_x = -qx * f[i+1, j] - qt_x * f_old[i, j] - qxt * f_old[i+1, j]
+                sum_z = -qz * f[i, j+1] - qt_z * f_old[i, j] - qxt * f_old[i, j+1]
+                w = weights[j, i]
+                f[i, j] = w * f[i, j] + (1.0f0 - w) * 0.5f0 * (sum_x + sum_z)
+            end
         end
 
         # Right-Top Corner
-        @tturbo for j in 2:nbc+1, i in (nx-nbc):nx-1
-            sum_x = -qx * f[i-1, j] - qt_x * f_old[i, j] - qxt * f_old[i-1, j]
-            sum_z = -qz * f[i, j+1] - qt_z * f_old[i, j] - qxt * f_old[i, j+1]
-            f[i, j] = weights[j, i] * f[i, j] + (1.0f0 - weights[j, i]) * 0.5f0 * (sum_x + sum_z)
+        @inbounds for j in 2:nbc+1
+            @simd for i in (nx-nbc):nx-1
+                sum_x = -qx * f[i-1, j] - qt_x * f_old[i, j] - qxt * f_old[i-1, j]
+                sum_z = -qz * f[i, j+1] - qt_z * f_old[i, j] - qxt * f_old[i, j+1]
+                w = weights[j, i]
+                f[i, j] = w * f[i, j] + (1.0f0 - w) * 0.5f0 * (sum_x + sum_z)
+            end
         end
     end
 end
@@ -157,7 +190,7 @@ function apply_habc_stress!(::CPUBackend, W::Wavefield, H::HABCConfig, M::Medium
 end
 
 # ==============================================================================
-# Free Surface Condition (Exact copy from original Solver.jl)
+# Free Surface Condition - OPTIMIZED
 # ==============================================================================
 
 """
@@ -173,41 +206,30 @@ function apply_free_surface!(::CPUBackend, W::Wavefield, M::Medium)
     nx = M.nx
     j_fs = M.pad + 1
     
-    @tturbo for i in 1:nx, j in j_fs-5:j_fs
-        W.tzz[i, j] = 0.0f0
-        W.txz[i, j] = 0.0f0
+    # Vectorized loop
+    @inbounds for j in j_fs-5:j_fs
+        @simd for i in 1:nx
+            W.tzz[i, j] = 0.0f0
+            W.txz[i, j] = 0.0f0
+        end
     end
     return nothing
 end
 
 # ==============================================================================
-# GPU Implementations
+# GPU Implementations - OPTIMIZED
 # ==============================================================================
 
-function backup_boundary!(::CUDABackend, W::Wavefield, H::HABCConfig, M::Medium)
-    nx, nz = M.nx, M.nz
-    nbc = H.nbc
-    is_fs = M.is_free_surface
-    threads = (16, 16)
-    blocks = (cld(nx, 16), cld(nz, 16))
-    
-    @cuda threads=threads blocks=blocks _backup_boundary_kernel!(
-        W.vx, W.vx_old, W.vz, W.vz_old, W.txx, W.txx_old, 
-        W.tzz, W.tzz_old, W.txz, W.txz_old,
-        nx, nz, nbc, is_fs
-    )
-    return nothing
-end
-
-function _backup_boundary_kernel!(vx, vx_old, vz, vz_old, txx, txx_old, 
-                                   tzz, tzz_old, txz, txz_old,
-                                   nx, nz, nbc, is_free_surface)
+function _backup_boundary_kernel_optimized!(vx, vx_old, vz, vz_old, txx, txx_old, 
+                                             tzz, tzz_old, txz, txz_old,
+                                             nx, nz, nbc, is_free_surface)
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     j = (blockIdx().y - 1) * blockDim().y + threadIdx().y
     
     if i <= nx && j <= nz
         j_top = is_free_surface ? nbc + 1 : 1
         if j >= j_top
+            # Check if we're in a boundary strip region
             is_strip = (i <= nbc + 2) || (i >= nx - nbc - 1) || 
                        (j <= nbc + 2) || (j >= nz - nbc - 1)
             if is_strip
@@ -221,6 +243,23 @@ function _backup_boundary_kernel!(vx, vx_old, vz, vz_old, txx, txx_old,
             end
         end
     end
+    return nothing
+end
+
+function backup_boundary!(::CUDABackend, W::Wavefield, H::HABCConfig, M::Medium)
+    nx, nz = M.nx, M.nz
+    nbc = H.nbc
+    is_fs = M.is_free_surface
+    
+    # Optimized block size
+    threads = (32, 8)
+    blocks = (cld(nx, 32), cld(nz, 8))
+    
+    @cuda threads=threads blocks=blocks _backup_boundary_kernel_optimized!(
+        W.vx, W.vx_old, W.vz, W.vz_old, W.txx, W.txx_old, 
+        W.tzz, W.tzz_old, W.txz, W.txz_old,
+        nx, nz, nbc, is_fs
+    )
     return nothing
 end
 
@@ -239,16 +278,16 @@ end
 
 function _apply_habc_gpu!(f, f_old, H, weights, M)
     nx, nz = M.nx, M.nz
-    threads = (16, 16)
-    blocks = (cld(nx, 16), cld(nz, 16))
+    threads = (32, 8)
+    blocks = (cld(nx, 32), cld(nz, 8))
     
-    @cuda threads=threads blocks=blocks _habc_kernel!(
+    @cuda threads=threads blocks=blocks _habc_kernel_optimized!(
         f, f_old, weights, H.qx, H.qz, H.qt_x, H.qt_z, H.qxt, 
         H.nbc, nx, nz, M.is_free_surface
     )
 end
 
-function _habc_kernel!(f, f_old, w, qx, qz, qt_x, qt_z, qxt, nbc, nx, nz, is_free_surface)
+function _habc_kernel_optimized!(f, f_old, w, qx, qz, qt_x, qt_z, qxt, nbc, nx, nz, is_free_surface)
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     j = (blockIdx().y - 1) * blockDim().y + threadIdx().y
     
@@ -260,37 +299,39 @@ function _habc_kernel!(f, f_old, w, qx, qz, qt_x, qt_z, qxt, nbc, nx, nz, is_fre
         in_bottom = j >= nz - nbc
         in_top = !is_free_surface && j <= nbc + 1
         
-        # Note: weights are (nz, nx), so index as w[j, i]
         wt = w[j, i]
+        one_minus_wt = 1.0f0 - wt
         
-        if in_left && !in_bottom && !in_top
-            sum_x = -qx * f[i+1, j] - qt_x * f_old[i, j] - qxt * f_old[i+1, j]
-            @inbounds f[i, j] = wt * f[i, j] + (1.0f0 - wt) * sum_x
-        elseif in_right && !in_bottom && !in_top
-            sum_x = -qx * f[i-1, j] - qt_x * f_old[i, j] - qxt * f_old[i-1, j]
-            @inbounds f[i, j] = wt * f[i, j] + (1.0f0 - wt) * sum_x
-        elseif in_bottom && !in_left && !in_right
-            sum_z = -qz * f[i, j-1] - qt_z * f_old[i, j] - qxt * f_old[i, j-1]
-            @inbounds f[i, j] = wt * f[i, j] + (1.0f0 - wt) * sum_z
-        elseif in_top && !in_left && !in_right
-            sum_z = -qz * f[i, j+1] - qt_z * f_old[i, j] - qxt * f_old[i, j+1]
-            @inbounds f[i, j] = wt * f[i, j] + (1.0f0 - wt) * sum_z
-        elseif in_left && in_bottom
-            sum_x = -qx * f[i+1, j] - qt_x * f_old[i, j] - qxt * f_old[i+1, j]
-            sum_z = -qz * f[i, j-1] - qt_z * f_old[i, j] - qxt * f_old[i, j-1]
-            @inbounds f[i, j] = wt * f[i, j] + (1.0f0 - wt) * 0.5f0 * (sum_x + sum_z)
-        elseif in_right && in_bottom
-            sum_x = -qx * f[i-1, j] - qt_x * f_old[i, j] - qxt * f_old[i-1, j]
-            sum_z = -qz * f[i, j-1] - qt_z * f_old[i, j] - qxt * f_old[i, j-1]
-            @inbounds f[i, j] = wt * f[i, j] + (1.0f0 - wt) * 0.5f0 * (sum_x + sum_z)
-        elseif in_left && in_top
-            sum_x = -qx * f[i+1, j] - qt_x * f_old[i, j] - qxt * f_old[i+1, j]
-            sum_z = -qz * f[i, j+1] - qt_z * f_old[i, j] - qxt * f_old[i, j+1]
-            @inbounds f[i, j] = wt * f[i, j] + (1.0f0 - wt) * 0.5f0 * (sum_x + sum_z)
-        elseif in_right && in_top
-            sum_x = -qx * f[i-1, j] - qt_x * f_old[i, j] - qxt * f_old[i-1, j]
-            sum_z = -qz * f[i, j+1] - qt_z * f_old[i, j] - qxt * f_old[i, j+1]
-            @inbounds f[i, j] = wt * f[i, j] + (1.0f0 - wt) * 0.5f0 * (sum_x + sum_z)
+        @inbounds begin
+            if in_left && !in_bottom && !in_top
+                sum_x = -qx * f[i+1, j] - qt_x * f_old[i, j] - qxt * f_old[i+1, j]
+                f[i, j] = wt * f[i, j] + one_minus_wt * sum_x
+            elseif in_right && !in_bottom && !in_top
+                sum_x = -qx * f[i-1, j] - qt_x * f_old[i, j] - qxt * f_old[i-1, j]
+                f[i, j] = wt * f[i, j] + one_minus_wt * sum_x
+            elseif in_bottom && !in_left && !in_right
+                sum_z = -qz * f[i, j-1] - qt_z * f_old[i, j] - qxt * f_old[i, j-1]
+                f[i, j] = wt * f[i, j] + one_minus_wt * sum_z
+            elseif in_top && !in_left && !in_right
+                sum_z = -qz * f[i, j+1] - qt_z * f_old[i, j] - qxt * f_old[i, j+1]
+                f[i, j] = wt * f[i, j] + one_minus_wt * sum_z
+            elseif in_left && in_bottom
+                sum_x = -qx * f[i+1, j] - qt_x * f_old[i, j] - qxt * f_old[i+1, j]
+                sum_z = -qz * f[i, j-1] - qt_z * f_old[i, j] - qxt * f_old[i, j-1]
+                f[i, j] = wt * f[i, j] + one_minus_wt * 0.5f0 * (sum_x + sum_z)
+            elseif in_right && in_bottom
+                sum_x = -qx * f[i-1, j] - qt_x * f_old[i, j] - qxt * f_old[i-1, j]
+                sum_z = -qz * f[i, j-1] - qt_z * f_old[i, j] - qxt * f_old[i, j-1]
+                f[i, j] = wt * f[i, j] + one_minus_wt * 0.5f0 * (sum_x + sum_z)
+            elseif in_left && in_top
+                sum_x = -qx * f[i+1, j] - qt_x * f_old[i, j] - qxt * f_old[i+1, j]
+                sum_z = -qz * f[i, j+1] - qt_z * f_old[i, j] - qxt * f_old[i, j+1]
+                f[i, j] = wt * f[i, j] + one_minus_wt * 0.5f0 * (sum_x + sum_z)
+            elseif in_right && in_top
+                sum_x = -qx * f[i-1, j] - qt_x * f_old[i, j] - qxt * f_old[i-1, j]
+                sum_z = -qz * f[i, j+1] - qt_z * f_old[i, j] - qxt * f_old[i, j+1]
+                f[i, j] = wt * f[i, j] + one_minus_wt * 0.5f0 * (sum_x + sum_z)
+            end
         end
     end
     return nothing

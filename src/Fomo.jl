@@ -1,7 +1,14 @@
 # ==============================================================================
-# Fomo.jl - Forward Modeling
+# Fomo.jl - Forward Modeling (OPTIMIZED)
 #
 # High-Performance 2D Elastic Wave Simulation Framework
+# 
+# OPTIMIZATIONS in this version:
+# - Precomputed buoyancy (1/rho) eliminates divisions in hot loops
+# - Precomputed lam_2mu (lambda + 2*mu) reduces computation
+# - Unrolled FD stencils for common orders (4th, 8th)
+# - Optimized GPU thread block configuration (32x8)
+# - Better memory access patterns with @simd vectorization
 # ==============================================================================
 
 module Fomo
@@ -93,10 +100,10 @@ export create_geometry, save_geometry, load_geometry
 # Backend abstraction (must be first)
 include("backends/backend.jl")
 
-# Core structures
+# Core structures (OPTIMIZED - now includes buoyancy fields)
 include("core/structures.jl")
 
-# Kernels
+# Kernels (OPTIMIZED - uses buoyancy, unrolled loops)
 include("kernels/velocity.jl")
 include("kernels/stress.jl")
 include("kernels/boundary.jl")
@@ -106,7 +113,7 @@ include("kernels/source_receiver.jl")
 include("io/output.jl")
 include("io/model_loader.jl")
 
-# Utilities (uses VelocityModel from model_loader.jl)
+# Utilities (OPTIMIZED - precomputes buoyancy and lam_2mu)
 include("utils/init.jl")
 
 # Geometry IO (ShotResult is now in structures.jl)

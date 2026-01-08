@@ -1,29 +1,32 @@
-# 在 Fomo.jl 目录下创建 .gitignore
-cd E:\dev\Fomo.jl
-
-# 创建 .gitignore
-@"
-# 大文件/数据
-*.jld2
-*.segy
-*.sgy
-*.bin
-*.mat
-*.npy
-*.npz
-*.h5
-*.hdf5
-
-# 输出目录
-outputs/
-output/
-videos/
-
-# Julia 编译缓存
-*.ji
+# Julia generated files
+*.jl.cov
+*.jl.*.cov
+*.jl.mem
 Manifest.toml
+
+# Build artifacts
+/docs/build/
+/docs/site/
+
+# Output directories
+/output/
+/outputs/
+*.bin
+*.dat
+
+# Large model files
+*.jld2
+!test/*.jld2
 
 # IDE
 .vscode/
 .idea/
-"@ | Out-File -Encoding utf8 .gitignore
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/

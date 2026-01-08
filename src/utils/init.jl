@@ -1,10 +1,10 @@
 # ==============================================================================
-# utils/init.jl
+# utils/init.jl (OPTIMIZED)
 #
 # Initialization utilities for Medium, HABC, etc.
+# OPTIMIZATION: Precomputes buoyancy (1/rho) and lam_2mu to eliminate 
+#               divisions in the hot loop
 # ==============================================================================
-
-using Interpolations
 
 # ==============================================================================
 # FD Coefficients
@@ -49,16 +49,18 @@ function ricker_wavelet(f0::Real, dt::Real, nt::Int)
 end
 
 # ==============================================================================
-# Medium Initialization
+# Medium Initialization - OPTIMIZED
 # ==============================================================================
 
 """
     init_medium(vp, vs, rho, dx, dz, nbc, fd_order, backend; free_surface=true)
 
 Initialize Medium with material properties.
+OPTIMIZED: Precomputes buoyancy (1/rho) and lam_2mu (lambda + 2*mu)
+          to eliminate expensive divisions in the simulation loop.
 
 # Arguments
-- `vp`, `vs`, `rho`: Velocity and density arrays
+- `vp`, `vs`, `rho`: Velocity and density arrays [nz, nx] (seismic convention)
 - `dx`, `dz`: Grid spacing
 - `nbc`: Boundary layer thickness
 - `fd_order`: Finite difference order
@@ -90,17 +92,19 @@ function init_medium(vp::Matrix, vs::Matrix, rho::Matrix,
     vs_pad = _pad_array(vs_t, pad)
     rho_pad = _pad_array(rho_t, pad)
     
-    lam, mu_txx, mu_txz, rho_vx, rho_vz = _compute_staggered_params(vp_pad, vs_pad, rho_pad)
+    # Compute all material properties including precomputed values
+    lam, mu_txx, mu_txz, buoy_vx, buoy_vz, lam_2mu = _compute_staggered_params_optimized(vp_pad, vs_pad, rho_pad)
     
     # Move to device
     return Medium(
         nx, nz, Float32(dx), Float32(dz), x_max, z_max,
         M, pad, free_surface,
-        to_device(rho_vx, backend),
-        to_device(rho_vz, backend),
         to_device(lam, backend),
         to_device(mu_txx, backend),
-        to_device(mu_txz, backend)
+        to_device(mu_txz, backend),
+        to_device(buoy_vx, backend),
+        to_device(buoy_vz, backend),
+        to_device(lam_2mu, backend)
     )
 end
 
@@ -139,32 +143,52 @@ function _pad_array(data::Matrix, pad::Int)
     return result
 end
 
-function _compute_staggered_params(vp, vs, rho)
+"""
+    _compute_staggered_params_optimized(vp, vs, rho)
+
+Compute staggered grid parameters with precomputed buoyancy and lam_2mu.
+OPTIMIZATION: Division by rho is done once here, not in every time step!
+"""
+function _compute_staggered_params_optimized(vp, vs, rho)
     nx, nz = size(vp)
     
+    # Basic Lamé parameters
     mu = Float32.(rho .* vs.^2)
     lam = Float32.(rho .* vp.^2 .- 2.0f0 .* mu)
     
-    rho_vx = Float32.(rho)
-    rho_vz = zeros(Float32, nx, nz)
+    # OPTIMIZED: Precompute lambda + 2*mu
+    lam_2mu = Float32.(lam .+ 2.0f0 .* mu)
     
-    for i in 1:nx-1, j in 1:nz-1
-        rho_vz[i, j] = 0.25f0 * (rho[i,j] + rho[i+1,j] + rho[i,j+1] + rho[i+1,j+1])
+    # OPTIMIZED: Precompute buoyancy (1/rho) instead of storing rho
+    # This eliminates division in the velocity update kernel!
+    buoy_vx = Float32.(1.0f0 ./ rho)
+    
+    # Staggered buoyancy for vz (average then invert)
+    buoy_vz = zeros(Float32, nx, nz)
+    @inbounds for j in 1:nz-1
+        for i in 1:nx-1
+            # Average rho at staggered position, then invert
+            rho_avg = 0.25f0 * (rho[i,j] + rho[i+1,j] + rho[i,j+1] + rho[i+1,j+1])
+            buoy_vz[i, j] = 1.0f0 / rho_avg
+        end
     end
-    rho_vz[nx, :] .= rho_vz[nx-1, :]
-    rho_vz[:, nz] .= rho_vz[:, nz-1]
+    buoy_vz[nx, :] .= buoy_vz[nx-1, :]
+    buoy_vz[:, nz] .= buoy_vz[:, nz-1]
     
+    # Harmonic average for mu at txz positions
     mu_txz = zeros(Float32, nx, nz)
-    for i in 1:nx, j in 1:nz-1
-        mu_txz[i, j] = 2.0f0 / (1.0f0/mu[i,j] + 1.0f0/mu[i,j+1])
+    @inbounds for j in 1:nz-1
+        for i in 1:nx
+            mu_txz[i, j] = 2.0f0 / (1.0f0/mu[i,j] + 1.0f0/mu[i,j+1])
+        end
     end
     mu_txz[:, nz] .= mu_txz[:, nz-1]
     
-    return lam, mu, mu_txz, rho_vx, rho_vz
+    return lam, mu, mu_txz, buoy_vx, buoy_vz, lam_2mu
 end
 
 # ==============================================================================
-# HABC Initialization
+# HABC Initialization (unchanged)
 # ==============================================================================
 
 """
@@ -172,30 +196,26 @@ end
 
 Initializes the Higdon Absorbing Boundary Condition (HABC) configuration.
 Computes extrapolation coefficients and spatial blending weight matrices.
-COPIED EXACTLY FROM ORIGINAL Utils.jl
 """
 function init_habc(nx::Int, nz::Int, nbc::Int, dt::Real, dx::Real, dz::Real, 
                    v_ref::Real, backend::AbstractBackend)
     
-    # Original formula from Utils.jl
     rx = Float32(v_ref * dt / dx)
     rz = Float32(v_ref * dt / dz)
     b_p = 0.45f0
     beta = 1.0f0
     
-    # Precompute extrapolation coefficients (original formula)
+    # Precompute extrapolation coefficients
     qx = Float32((b_p * (beta + rx) - rx) / ((beta + rx) * (1 - b_p)))
     qz = Float32((b_p * (beta + rz) - rz) / ((beta + rz) * (1 - b_p)))
     qt_x = Float32((b_p * (beta + rx) - beta) / ((beta + rx) * (1 - b_p)))
     qt_z = Float32((b_p * (beta + rz) - beta) / ((beta + rz) * (1 - b_p)))
     qxt = Float32(b_p / (b_p - 1.0f0))
     
-    # Distance function for blending boundary and interior solutions
+    # Distance function for blending
     dist(i, j) = min(i - 1, nx - i, j - 1, nz - j)
     
-    # Generate weighting matrices (linear ramp from 0.0 to 1.0)
-    # Shape is (nz, nx) for weights[j, i] indexing
-    # Different offsets for different fields!
+    # Generate weighting matrices
     w_vx = [Float32(clamp((dist(i, j) - 0.0) / nbc, 0.0, 1.0)) for j in 1:nz, i in 1:nx]
     w_vz = [Float32(clamp((dist(i, j) - 0.5) / nbc, 0.0, 1.0)) for j in 1:nz, i in 1:nx]
     w_tau = [Float32(clamp((dist(i, j) - 0.75) / nbc, 0.0, 1.0)) for j in 1:nz, i in 1:nx]
@@ -209,7 +229,7 @@ function init_habc(nx::Int, nz::Int, nbc::Int, dt::Real, dx::Real, dz::Real,
 end
 
 # ==============================================================================
-# Receiver Setup
+# Receiver Setup (unchanged)
 # ==============================================================================
 
 """
