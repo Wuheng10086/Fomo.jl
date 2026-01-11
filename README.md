@@ -1,6 +1,10 @@
 # Fomo.jl
 
-**F**orward M**o**deling - High-Performance 2D Elastic Wave Simulation
+**Fo**rward **Mo**deling - High-Performance 2D Elastic Wave Simulation
+
+
+https://github.com/user-attachments/assets/4cabc046-8a61-4dcc-9140-703bc50a7364
+
 
 ## Features
 
