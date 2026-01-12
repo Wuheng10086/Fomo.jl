@@ -174,6 +174,7 @@ Automatically handles:
 - `config::SimulationConfig`: Simulation configuration (required)
 - `video_config::Union{VideoConfig, Nothing} = nothing`: Video recording configuration. 
   If `nothing`, no video is recorded
+- `be::Backend`: Backend to use Backend(:cpu) or Backend(:cuda). Default is Backend(:cuda).
 
 # Returns
 - `SimulationResult`: Contains gather data and paths to output files
@@ -358,11 +359,12 @@ function simulate_irregular!(model::VelocityModel,
     src_x::Real,
     rec_x::Vector{<:Real};
     config::IrregularSurfaceConfig=IrregularSurfaceConfig(),
-    video_config::Union{VideoConfig,Nothing}=nothing)
+    video_config::Union{VideoConfig,Nothing}=nothing,
+    be=backend(:cuda))
 
     mkpath(config.output_dir)
 
-    be = is_cuda_available() ? backend(:cuda) : backend(:cpu)
+    #be = is_cuda_available() ? backend(:cuda) : backend(:cpu)
     @info "Irregular surface simulation" backend = typeof(be) ibm_method = config.ibm_method
 
     vp_max = maximum(model.vp)
