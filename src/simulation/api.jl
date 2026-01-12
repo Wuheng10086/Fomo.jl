@@ -217,11 +217,12 @@ function simulate!(model::VelocityModel,
     src_x::Real, src_z::Real,
     rec_x::Vector{<:Real}, rec_z::Vector{<:Real};
     config::SimulationConfig=SimulationConfig(),
-    video_config::Union{VideoConfig,Nothing}=nothing)
+    video_config::Union{VideoConfig,Nothing}=nothing,
+    be=backend(:cuda))
 
     mkpath(config.output_dir)
 
-    be = is_cuda_available() ? backend(:cuda) : backend(:cpu)
+    #be = is_cuda_available() ? backend(:cuda) : backend(:cpu)
     @info "Simulation started" backend = typeof(be) model = model.name
 
     vp_max = maximum(model.vp)
@@ -231,7 +232,7 @@ function simulate!(model::VelocityModel,
     @info "Parameters" dt_ms = round(dt * 1000, digits=3) nt = config.nt
 
     medium = init_medium(model, config.nbc, config.fd_order, be; free_surface=config.free_surface)
-    habc = init_habc(medium.nx, medium.nz, config.nbc, dt, model.dx, model.dz, vp_max, be)
+    habc = init_habc(medium.nx, medium.nz, config.nbc, medium.pad, dt, model.dx, model.dz, vp_max, be)
     fd_coeffs = to_device(get_fd_coefficients(config.fd_order), be)
     wavefield = Wavefield(medium.nx, medium.nz, be)
     params = SimParams(dt, config.nt, model.dx, model.dz, config.fd_order)
@@ -255,7 +256,7 @@ function simulate!(model::VelocityModel,
 
     recorder = nothing
     if video_config !== nothing
-        recorder = MultiFieldRecorder(medium.nx, medium.nz, dt, video_config)
+        recorder = MultiFieldRecorder(medium.nx, medium.nz, dt, video_config; pad=medium.pad)
     end
 
     reset!(be, wavefield)
@@ -380,7 +381,7 @@ function simulate_irregular!(model::VelocityModel,
 
     @info "Irregular surface" ghost_points = surface_cpu.n_ghost method = config.ibm_method
 
-    habc = init_habc(medium.nx, medium.nz, config.nbc, dt, model.dx, model.dz, vp_max, be)
+    habc = init_habc(medium.nx, medium.nz, config.nbc, medium.pad, dt, model.dx, model.dz, vp_max, be)
     fd_coeffs = to_device(get_fd_coefficients(config.fd_order), be)
     wavefield = Wavefield(medium.nx, medium.nz, be)
     params = SimParams(dt, config.nt, model.dx, model.dz, config.fd_order)

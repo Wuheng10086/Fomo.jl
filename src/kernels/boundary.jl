@@ -55,7 +55,7 @@ function backup_boundary!(::CPUBackend, W::Wavefield, H::HABCConfig, M::Medium)
     nx, nz = M.nx, M.nz
     nbc = H.nbc
     is_fs = M.is_free_surface
-    
+
     copy_boundary_strip!(W.vx_old, W.vx, nbc, nx, nz, is_fs)
     copy_boundary_strip!(W.vz_old, W.vz, nbc, nx, nz, is_fs)
     copy_boundary_strip!(W.txx_old, W.txx, nbc, nx, nz, is_fs)
@@ -72,46 +72,67 @@ end
     apply_habc!(f, f_old, H, weights, nx, nz, is_free_surface)
 
 Apply Higdon Absorbing Boundary Conditions (HABC) to field `f`.
-OPTIMIZED: Reordered loops for better cache locality
+
+## 物理原理：
+1. 先处理四条边（1D HABC）：从内部向边界外推
+2. 再处理四个角（2D HABC）：用相邻两条边的外推结果平均
+
+## 边界区域划分（确保 Edges 不覆盖 Corners）：
+- Left Edge:   i = 2:nbc+1,      j = nbc+2:nz-nbc-1  (不含Top/Bottom角)
+- Right Edge:  i = nx-nbc:nx-1,  j = nbc+2:nz-nbc-1  (不含Top/Bottom角)
+- Top Edge:    j = 2:nbc+1,      i = nbc+2:nx-nbc-1  (不含Left/Right角)
+- Bottom Edge: j = nz-nbc:nz-1,  i = nbc+2:nx-nbc-1  (不含Left/Right角)
+- Corners: 四个角区域
 """
 function apply_habc!(f, f_old, H, weights, nx, nz, is_free_surface)
     nbc = H.nbc
     qx, qz, qt_x, qt_z, qxt = H.qx, H.qz, H.qt_x, H.qt_z, H.qxt
-    j_start = is_free_surface ? nbc + 1 : 2
 
-    # --- 1. Pure Edges (1D Absorption) ---
+    # 边界索引定义
+    i_left_start, i_left_end = 2, nbc + 1
+    i_right_start, i_right_end = nx - nbc, nx - 1
+    j_top_start, j_top_end = 2, nbc + 1
+    j_bot_start, j_bot_end = nz - nbc, nz - 1
 
-    # Left Edge - optimized loop order
-    @inbounds for i in 2:nbc+1
-        @simd for j in j_start:(nz-nbc-1)
+    # Edge 的非角落部分（完全对称）
+    i_edge_start, i_edge_end = nbc + 2, nx - nbc - 1
+    j_edge_start, j_edge_end = nbc + 2, nz - nbc - 1
+
+    # =========================================================================
+    # 1. 先处理四条边 (1D HABC) - 不含角落
+    # =========================================================================
+
+    # Left Edge (不含角落)
+    @inbounds for i in i_left_start:i_left_end
+        @simd for j in j_edge_start:j_edge_end
             sum_x = -qx * f[i+1, j] - qt_x * f_old[i, j] - qxt * f_old[i+1, j]
             w = weights[j, i]
             f[i, j] = w * f[i, j] + (1.0f0 - w) * sum_x
         end
     end
 
-    # Right Edge
-    @inbounds for i in (nx-nbc):nx-1
-        @simd for j in j_start:(nz-nbc-1)
+    # Right Edge (不含角落) - 从外向内处理，确保读取的f[i-1,j]未被修改
+    @inbounds for i in i_right_end:-1:i_right_start  # 反向循环！
+        @simd for j in j_edge_start:j_edge_end
             sum_x = -qx * f[i-1, j] - qt_x * f_old[i, j] - qxt * f_old[i-1, j]
             w = weights[j, i]
             f[i, j] = w * f[i, j] + (1.0f0 - w) * sum_x
         end
     end
 
-    # Bottom Edge
-    @inbounds for j in (nz-nbc):nz-1
-        @simd for i in (nbc+2):(nx-nbc-1)
+    # Bottom Edge (不含角落) - 从外向内处理，确保读取的f[i,j-1]未被修改
+    @inbounds for j in j_bot_end:-1:j_bot_start  # 反向循环！
+        @simd for i in i_edge_start:i_edge_end
             sum_z = -qz * f[i, j-1] - qt_z * f_old[i, j] - qxt * f_old[i, j-1]
             w = weights[j, i]
             f[i, j] = w * f[i, j] + (1.0f0 - w) * sum_z
         end
     end
 
-    # Top Edge (Skip if Free Surface)
+    # Top Edge (不含角落) - Skip if Free Surface
     if !is_free_surface
-        @inbounds for j in 2:nbc+1
-            @simd for i in (nbc+2):(nx-nbc-1)
+        @inbounds for j in j_top_start:j_top_end
+            @simd for i in i_edge_start:i_edge_end
                 sum_z = -qz * f[i, j+1] - qt_z * f_old[i, j] - qxt * f_old[i, j+1]
                 w = weights[j, i]
                 f[i, j] = w * f[i, j] + (1.0f0 - w) * sum_z
@@ -119,11 +140,13 @@ function apply_habc!(f, f_old, H, weights, nx, nz, is_free_surface)
         end
     end
 
-    # --- 2. Corner Coupling ---
+    # =========================================================================
+    # 2. 再处理四个角落 (2D HABC) - 使用相邻两边的外推结果平均
+    # =========================================================================
 
     # Left-Bottom Corner
-    @inbounds for j in (nz-nbc):nz-1
-        @simd for i in 2:nbc+1
+    @inbounds for j in j_bot_start:j_bot_end
+        @simd for i in i_left_start:i_left_end
             sum_x = -qx * f[i+1, j] - qt_x * f_old[i, j] - qxt * f_old[i+1, j]
             sum_z = -qz * f[i, j-1] - qt_z * f_old[i, j] - qxt * f_old[i, j-1]
             w = weights[j, i]
@@ -132,8 +155,8 @@ function apply_habc!(f, f_old, H, weights, nx, nz, is_free_surface)
     end
 
     # Right-Bottom Corner
-    @inbounds for j in (nz-nbc):nz-1
-        @simd for i in (nx-nbc):nx-1
+    @inbounds for j in j_bot_start:j_bot_end
+        @simd for i in i_right_start:i_right_end
             sum_x = -qx * f[i-1, j] - qt_x * f_old[i, j] - qxt * f_old[i-1, j]
             sum_z = -qz * f[i, j-1] - qt_z * f_old[i, j] - qxt * f_old[i, j-1]
             w = weights[j, i]
@@ -143,8 +166,8 @@ function apply_habc!(f, f_old, H, weights, nx, nz, is_free_surface)
 
     if !is_free_surface
         # Left-Top Corner
-        @inbounds for j in 2:nbc+1
-            @simd for i in 2:nbc+1
+        @inbounds for j in j_top_start:j_top_end
+            @simd for i in i_left_start:i_left_end
                 sum_x = -qx * f[i+1, j] - qt_x * f_old[i, j] - qxt * f_old[i+1, j]
                 sum_z = -qz * f[i, j+1] - qt_z * f_old[i, j] - qxt * f_old[i, j+1]
                 w = weights[j, i]
@@ -153,8 +176,8 @@ function apply_habc!(f, f_old, H, weights, nx, nz, is_free_surface)
         end
 
         # Right-Top Corner
-        @inbounds for j in 2:nbc+1
-            @simd for i in (nx-nbc):nx-1
+        @inbounds for j in j_top_start:j_top_end
+            @simd for i in i_right_start:i_right_end
                 sum_x = -qx * f[i-1, j] - qt_x * f_old[i, j] - qxt * f_old[i-1, j]
                 sum_z = -qz * f[i, j+1] - qt_z * f_old[i, j] - qxt * f_old[i, j+1]
                 w = weights[j, i]
@@ -202,10 +225,10 @@ function apply_free_surface!(::CPUBackend, W::Wavefield, M::Medium)
     if !M.is_free_surface
         return nothing
     end
-    
+
     nx = M.nx
     j_fs = M.pad + 1
-    
+
     # Vectorized loop
     @inbounds for j in j_fs-5:j_fs
         @simd for i in 1:nx
@@ -220,17 +243,17 @@ end
 # GPU Implementations - OPTIMIZED
 # ==============================================================================
 
-function _backup_boundary_kernel_optimized!(vx, vx_old, vz, vz_old, txx, txx_old, 
-                                             tzz, tzz_old, txz, txz_old,
-                                             nx, nz, nbc, is_free_surface)
+function _backup_boundary_kernel_optimized!(vx, vx_old, vz, vz_old, txx, txx_old,
+    tzz, tzz_old, txz, txz_old,
+    nx, nz, nbc, is_free_surface)
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     j = (blockIdx().y - 1) * blockDim().y + threadIdx().y
-    
+
     if i <= nx && j <= nz
         j_top = is_free_surface ? nbc + 1 : 1
         if j >= j_top
             # Check if we're in a boundary strip region
-            is_strip = (i <= nbc + 2) || (i >= nx - nbc - 1) || 
+            is_strip = (i <= nbc + 2) || (i >= nx - nbc - 1) ||
                        (j <= nbc + 2) || (j >= nz - nbc - 1)
             if is_strip
                 @inbounds begin
@@ -250,13 +273,13 @@ function backup_boundary!(::CUDABackend, W::Wavefield, H::HABCConfig, M::Medium)
     nx, nz = M.nx, M.nz
     nbc = H.nbc
     is_fs = M.is_free_surface
-    
+
     # Optimized block size
     threads = (32, 8)
     blocks = (cld(nx, 32), cld(nz, 8))
-    
-    @cuda threads=threads blocks=blocks _backup_boundary_kernel_optimized!(
-        W.vx, W.vx_old, W.vz, W.vz_old, W.txx, W.txx_old, 
+
+    @cuda threads = threads blocks = blocks _backup_boundary_kernel_optimized!(
+        W.vx, W.vx_old, W.vz, W.vz_old, W.txx, W.txx_old,
         W.tzz, W.tzz_old, W.txz, W.txz_old,
         nx, nz, nbc, is_fs
     )
@@ -280,74 +303,123 @@ function _apply_habc_gpu!(f, f_old, H, weights, M)
     nx, nz = M.nx, M.nz
     threads = (32, 8)
     blocks = (cld(nx, 32), cld(nz, 8))
-    
-    @cuda threads=threads blocks=blocks _habc_kernel_optimized!(
-        f, f_old, weights, H.qx, H.qz, H.qt_x, H.qt_z, H.qxt, 
+
+    # GPU 需要分两次调用，按正确的物理顺序：
+    # 1. 先处理 Edges (1D外推)
+    # 2. 再处理 Corners (用相邻两边的结果平均)
+
+    @cuda threads = threads blocks = blocks _habc_edges_kernel!(
+        f, f_old, weights, H.qx, H.qz, H.qt_x, H.qt_z, H.qxt,
+        H.nbc, nx, nz, M.is_free_surface
+    )
+
+    @cuda threads = threads blocks = blocks _habc_corners_kernel!(
+        f, f_old, weights, H.qx, H.qz, H.qt_x, H.qt_z, H.qxt,
         H.nbc, nx, nz, M.is_free_surface
     )
 end
 
-function _habc_kernel_optimized!(f, f_old, w, qx, qz, qt_x, qt_z, qxt, nbc, nx, nz, is_free_surface)
+"""
+GPU Kernel: 处理四条边 (1D HABC) - 不含角落，先执行
+"""
+function _habc_edges_kernel!(f, f_old, w, qx, qz, qt_x, qt_z, qxt, nbc, nx, nz, is_free_surface)
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     j = (blockIdx().y - 1) * blockDim().y + threadIdx().y
-    
-    j_start = is_free_surface ? nbc + 1 : 2
-    
-    if i > 1 && i < nx && j >= j_start && j < nz
+
+    if i > 1 && i < nx && j > 1 && j < nz
         in_left = i <= nbc + 1
         in_right = i >= nx - nbc
         in_bottom = j >= nz - nbc
         in_top = !is_free_surface && j <= nbc + 1
-        
-        wt = w[j, i]
-        one_minus_wt = 1.0f0 - wt
-        
-        @inbounds begin
-            if in_left && !in_bottom && !in_top
-                sum_x = -qx * f[i+1, j] - qt_x * f_old[i, j] - qxt * f_old[i+1, j]
-                f[i, j] = wt * f[i, j] + one_minus_wt * sum_x
-            elseif in_right && !in_bottom && !in_top
-                sum_x = -qx * f[i-1, j] - qt_x * f_old[i, j] - qxt * f_old[i-1, j]
-                f[i, j] = wt * f[i, j] + one_minus_wt * sum_x
-            elseif in_bottom && !in_left && !in_right
-                sum_z = -qz * f[i, j-1] - qt_z * f_old[i, j] - qxt * f_old[i, j-1]
-                f[i, j] = wt * f[i, j] + one_minus_wt * sum_z
-            elseif in_top && !in_left && !in_right
-                sum_z = -qz * f[i, j+1] - qt_z * f_old[i, j] - qxt * f_old[i, j+1]
-                f[i, j] = wt * f[i, j] + one_minus_wt * sum_z
-            elseif in_left && in_bottom
-                sum_x = -qx * f[i+1, j] - qt_x * f_old[i, j] - qxt * f_old[i+1, j]
-                sum_z = -qz * f[i, j-1] - qt_z * f_old[i, j] - qxt * f_old[i, j-1]
-                f[i, j] = wt * f[i, j] + one_minus_wt * 0.5f0 * (sum_x + sum_z)
-            elseif in_right && in_bottom
-                sum_x = -qx * f[i-1, j] - qt_x * f_old[i, j] - qxt * f_old[i-1, j]
-                sum_z = -qz * f[i, j-1] - qt_z * f_old[i, j] - qxt * f_old[i, j-1]
-                f[i, j] = wt * f[i, j] + one_minus_wt * 0.5f0 * (sum_x + sum_z)
-            elseif in_left && in_top
-                sum_x = -qx * f[i+1, j] - qt_x * f_old[i, j] - qxt * f_old[i+1, j]
-                sum_z = -qz * f[i, j+1] - qt_z * f_old[i, j] - qxt * f_old[i, j+1]
-                f[i, j] = wt * f[i, j] + one_minus_wt * 0.5f0 * (sum_x + sum_z)
-            elseif in_right && in_top
-                sum_x = -qx * f[i-1, j] - qt_x * f_old[i, j] - qxt * f_old[i-1, j]
-                sum_z = -qz * f[i, j+1] - qt_z * f_old[i, j] - qxt * f_old[i, j+1]
-                f[i, j] = wt * f[i, j] + one_minus_wt * 0.5f0 * (sum_x + sum_z)
+
+        # 只处理边缘区域（不含角落）
+        is_left_edge = in_left && !in_bottom && !in_top
+        is_right_edge = in_right && !in_bottom && !in_top
+        is_bottom_edge = in_bottom && !in_left && !in_right
+        is_top_edge = in_top && !in_left && !in_right
+
+        if is_left_edge || is_right_edge || is_bottom_edge || is_top_edge
+            wt = w[j, i]
+            one_minus_wt = 1.0f0 - wt
+
+            @inbounds begin
+                if is_left_edge
+                    sum_x = -qx * f[i+1, j] - qt_x * f_old[i, j] - qxt * f_old[i+1, j]
+                    f[i, j] = wt * f[i, j] + one_minus_wt * sum_x
+                elseif is_right_edge
+                    sum_x = -qx * f[i-1, j] - qt_x * f_old[i, j] - qxt * f_old[i-1, j]
+                    f[i, j] = wt * f[i, j] + one_minus_wt * sum_x
+                elseif is_bottom_edge
+                    sum_z = -qz * f[i, j-1] - qt_z * f_old[i, j] - qxt * f_old[i, j-1]
+                    f[i, j] = wt * f[i, j] + one_minus_wt * sum_z
+                elseif is_top_edge
+                    sum_z = -qz * f[i, j+1] - qt_z * f_old[i, j] - qxt * f_old[i, j+1]
+                    f[i, j] = wt * f[i, j] + one_minus_wt * sum_z
+                end
             end
         end
     end
     return nothing
 end
 
+"""
+GPU Kernel: 处理四个角落 (2D HABC) - 用相邻两边的结果平均，后执行
+"""
+function _habc_corners_kernel!(f, f_old, w, qx, qz, qt_x, qt_z, qxt, nbc, nx, nz, is_free_surface)
+    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    j = (blockIdx().y - 1) * blockDim().y + threadIdx().y
+
+    if i > 1 && i < nx && j > 1 && j < nz
+        in_left = i <= nbc + 1
+        in_right = i >= nx - nbc
+        in_bottom = j >= nz - nbc
+        in_top = !is_free_surface && j <= nbc + 1
+
+        # 只处理角落区域
+        is_corner = (in_left || in_right) && (in_top || in_bottom)
+
+        if is_corner
+            wt = w[j, i]
+            one_minus_wt = 1.0f0 - wt
+
+            @inbounds begin
+                if in_left && in_bottom
+                    sum_x = -qx * f[i+1, j] - qt_x * f_old[i, j] - qxt * f_old[i+1, j]
+                    sum_z = -qz * f[i, j-1] - qt_z * f_old[i, j] - qxt * f_old[i, j-1]
+                    f[i, j] = wt * f[i, j] + one_minus_wt * 0.5f0 * (sum_x + sum_z)
+                elseif in_right && in_bottom
+                    sum_x = -qx * f[i-1, j] - qt_x * f_old[i, j] - qxt * f_old[i-1, j]
+                    sum_z = -qz * f[i, j-1] - qt_z * f_old[i, j] - qxt * f_old[i, j-1]
+                    f[i, j] = wt * f[i, j] + one_minus_wt * 0.5f0 * (sum_x + sum_z)
+                elseif in_left && in_top
+                    sum_x = -qx * f[i+1, j] - qt_x * f_old[i, j] - qxt * f_old[i+1, j]
+                    sum_z = -qz * f[i, j+1] - qt_z * f_old[i, j] - qxt * f_old[i, j+1]
+                    f[i, j] = wt * f[i, j] + one_minus_wt * 0.5f0 * (sum_x + sum_z)
+                elseif in_right && in_top
+                    sum_x = -qx * f[i-1, j] - qt_x * f_old[i, j] - qxt * f_old[i-1, j]
+                    sum_z = -qz * f[i, j+1] - qt_z * f_old[i, j] - qxt * f_old[i, j+1]
+                    f[i, j] = wt * f[i, j] + one_minus_wt * 0.5f0 * (sum_x + sum_z)
+                end
+            end
+        end
+    end
+    return nothing
+end
+
+# 删除旧的合并kernel
+# function _habc_kernel_optimized! 已被上面两个kernel替代
+
 function apply_free_surface!(::CUDABackend, W::Wavefield, M::Medium)
     if !M.is_free_surface
         return nothing
     end
-    
+
     nx = M.nx
     j_fs = M.pad + 1
     threads = (256, 1)
     blocks = (cld(nx, 256), 6)
-    
-    @cuda threads=threads blocks=blocks _free_surface_kernel!(W.tzz, W.txz, nx, j_fs)
+
+    @cuda threads = threads blocks = blocks _free_surface_kernel!(W.tzz, W.txz, nx, j_fs)
     return nothing
 end
 
@@ -355,7 +427,7 @@ function _free_surface_kernel!(tzz, txz, nx, j_fs)
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     j_offset = blockIdx().y - 1
     j = j_fs - 5 + j_offset
-    
+
     if i <= nx && j >= 1 && j <= j_fs
         @inbounds tzz[i, j] = 0.0f0
         @inbounds txz[i, j] = 0.0f0

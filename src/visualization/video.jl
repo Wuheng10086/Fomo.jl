@@ -9,10 +9,10 @@
 using Printf
 
 # Import CairoMakie functions
-using CairoMakie: Figure, Axis, heatmap!, Colorbar, DataAspect, Observable, record
+using CairoMakie: Figure, Axis, heatmap!, Colorbar, DataAspect, Observable, record, lines!
 
 """
-    VideoConfig(; fields, skip, downsample, colormap, fps)
+    VideoConfig(; fields, skip, downsample, colormap, fps, show_boundary)
 
 Configuration for wavefield video recording.
 
@@ -33,6 +33,8 @@ Configuration for wavefield video recording.
   - `:viridis` - Green-blue-yellow
   - Any valid CairoMakie/Makie colormap
 - `fps::Int = 30`: Video frame rate (frames per second)
+- `show_boundary::Bool = true`: Show dashed line marking physical domain boundary
+  (separates interior from absorbing boundary layers)
 
 # Example
 ```julia
@@ -47,6 +49,9 @@ video_config = VideoConfig(fields=[:vel], skip=5, colormap=:inferno)
 
 # High-quality video (more frames)
 video_config = VideoConfig(fields=[:vz], skip=2, fps=60)
+
+# Hide boundary marker
+video_config = VideoConfig(fields=[:vz], skip=5, show_boundary=false)
 ```
 
 # Notes
@@ -54,6 +59,7 @@ video_config = VideoConfig(fields=[:vz], skip=2, fps=60)
 - Video duration = (nt ÷ skip) / fps seconds
 - Larger `skip` reduces file size but may miss fast wave propagation
 - `:vel` uses asymmetric colormap (0 to max) since magnitude is non-negative
+- The dashed boundary line helps distinguish physical domain from PML/HABC region
 
 See also: [`simulate!`](@ref), [`simulate_irregular!`](@ref)
 """
@@ -63,11 +69,13 @@ struct VideoConfig
     downsample::Int
     colormap::Symbol
     fps::Int
+    show_boundary::Bool  # 显示物理区域边界框
 end
 
 function VideoConfig(; fields::Vector{Symbol}=[:vz], skip::Int=10,
-    downsample::Int=1, colormap::Symbol=:seismic, fps::Int=30)
-    VideoConfig(fields, skip, downsample, colormap, fps)
+    downsample::Int=1, colormap::Symbol=:seismic, fps::Int=30,
+    show_boundary::Bool=true)
+    VideoConfig(fields, skip, downsample, colormap, fps, show_boundary)
 end
 
 # ==============================================================================
@@ -90,15 +98,16 @@ mutable struct FieldRecorder
     config::VideoConfig
     nx::Int
     nz::Int
+    pad::Int  # 边界层厚度 (nbc + M)
     frame_count::Int
 end
 
-function FieldRecorder(nx::Int, nz::Int, config::VideoConfig)
+function FieldRecorder(nx::Int, nz::Int, config::VideoConfig; pad::Int=0)
     frames = Dict{Symbol,Vector{Matrix{Float32}}}()
     for field in config.fields
         frames[field] = Matrix{Float32}[]
     end
-    FieldRecorder(frames, Float32[], config, nx, nz, 0)
+    FieldRecorder(frames, Float32[], config, nx, nz, pad, 0)
 end
 
 """
@@ -189,8 +198,8 @@ mutable struct MultiFieldRecorder
     dt::Float32
 end
 
-function MultiFieldRecorder(nx::Int, nz::Int, dt::Float32, config::VideoConfig)
-    MultiFieldRecorder(FieldRecorder(nx, nz, config), dt)
+function MultiFieldRecorder(nx::Int, nz::Int, dt::Float32, config::VideoConfig; pad::Int=0)
+    MultiFieldRecorder(FieldRecorder(nx, nz, config; pad=pad), dt)
 end
 
 # Make it callable as a callback
@@ -289,6 +298,22 @@ function generate_video(recorder::FieldRecorder, output::String;
         colormap=colormap,
         colorrange=crange)
     ax.yreversed = true  # Z increases downward
+
+    # 添加物理区域边界框（虚线）
+    pad = recorder.pad
+    ds = recorder.config.downsample
+    if recorder.config.show_boundary && pad > 0
+        # 计算降采样后的边界位置
+        pad_ds = pad ÷ ds + 1
+        x_min, x_max = pad_ds, nx_ds - pad_ds + 1
+        z_min, z_max = pad_ds, nz_ds - pad_ds + 1
+
+        # 画虚线矩形框
+        boundary_x = [x_min, x_max, x_max, x_min, x_min]
+        boundary_z = [z_min, z_min, z_max, z_max, z_min]
+        lines!(ax, boundary_x, boundary_z,
+            color=:black, linewidth=2, linestyle=:dash)
+    end
 
     Colorbar(fig[1, 2], hm, label=string(field_name))
 

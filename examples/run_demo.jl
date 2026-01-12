@@ -11,7 +11,7 @@ using Fomo
 # ==============================================================================
 
 println("="^60)
-println("  Demo 1: Quick test (no video)")
+println("  Demo 1: Quick test")
 println("="^60)
 
 nx, nz = 200, 100
@@ -25,10 +25,12 @@ model = VelocityModel(vp, vs, rho, dx, dx; name="Homogeneous")
 
 result1 = simulate!(
     model,
-    nx * dx / 2, 50.0f0,
+    nx * dx / 2, 500.0f0,
     Float32.(range(dx * 5, dx * (nx - 5), length=50)),
     fill(10.0f0, 50);
-    config=SimulationConfig(nt=1000, output_dir="outputs/demo1_quick")
+    config=SimulationConfig(nt=1000, output_dir="outputs/demo1_quick", free_surface=false),
+    video_config=VideoConfig(fields=[:vz], skip=10),
+    be=backend(:cpu)
 )
 
 println("Outputs: outputs/demo1_quick/")

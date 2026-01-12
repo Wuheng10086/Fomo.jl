@@ -11,10 +11,10 @@
 # ==============================================================================
 
 const FD_COEFFICIENTS = Dict(
-    2  => Float32[1.0],
-    4  => Float32[1.125, -0.041666667],
-    6  => Float32[1.171875, -0.065104167, 0.0046875],
-    8  => Float32[1.1962890625, -0.079752604167, 0.0095703125, -0.000697544643],
+    2 => Float32[1.0],
+    4 => Float32[1.125, -0.041666667],
+    6 => Float32[1.171875, -0.065104167, 0.0046875],
+    8 => Float32[1.1962890625, -0.079752604167, 0.0095703125, -0.000697544643],
     10 => Float32[1.2115478515625, -0.089721679687, 0.0138427734375, -0.00176565987723, 0.0001186795166]
 )
 
@@ -41,7 +41,7 @@ function ricker_wavelet(f0::Real, dt::Real, nt::Int)
     t0 = 1.0 / f0
     wavelet = zeros(Float32, nt)
     for i in 1:nt
-        τ = (i-1) * dt - t0
+        τ = (i - 1) * dt - t0
         arg = (π * f0 * τ)^2
         wavelet[i] = Float32((1.0 - 2.0 * arg) * exp(-arg))
     end
@@ -67,34 +67,34 @@ OPTIMIZED: Precomputes buoyancy (1/rho) and lam_2mu (lambda + 2*mu)
 - `backend`: Target backend (CPU_BACKEND or CUDA_BACKEND)
 - `free_surface`: Enable free surface at top
 """
-function init_medium(vp::Matrix, vs::Matrix, rho::Matrix, 
-                     dx::Real, dz::Real, nbc::Int, fd_order::Int, 
-                     backend::AbstractBackend; free_surface::Bool=true)
-    
+function init_medium(vp::Matrix, vs::Matrix, rho::Matrix,
+    dx::Real, dz::Real, nbc::Int, fd_order::Int,
+    backend::AbstractBackend; free_surface::Bool=true)
+
     M = fd_order ÷ 2
     pad = nbc + M
-    
+
     # Input data is [nz, nx] (seismic convention)
     # Transpose to [nx, nz] for simulation (better cache performance)
     vp_t = permutedims(vp)
     vs_t = permutedims(vs)
     rho_t = permutedims(rho)
-    
+
     nx_inner, nz_inner = size(vp_t)
     nx = nx_inner + 2 * pad
     nz = nz_inner + 2 * pad
-    
+
     x_max = Float32((nx_inner - 1) * dx)
     z_max = Float32((nz_inner - 1) * dz)
-    
+
     # Pad and compute staggered parameters
     vp_pad = _pad_array(vp_t, pad)
     vs_pad = _pad_array(vs_t, pad)
     rho_pad = _pad_array(rho_t, pad)
-    
+
     # Compute all material properties including precomputed values
     lam, mu_txx, mu_txz, buoy_vx, buoy_vz, lam_2mu = _compute_staggered_params_optimized(vp_pad, vs_pad, rho_pad)
-    
+
     # Move to device
     return Medium(
         nx, nz, Float32(dx), Float32(dz), x_max, z_max,
@@ -119,18 +119,18 @@ model = load_model("marmousi.jld2")
 medium = init_medium(model, 50, 8, backend(:cpu))
 ```
 """
-function init_medium(model::VelocityModel, nbc::Int, fd_order::Int, 
-                     backend::AbstractBackend; free_surface::Bool=true)
-    return init_medium(model.vp, model.vs, model.rho, 
-                       model.dx, model.dz, nbc, fd_order, backend;
-                       free_surface=free_surface)
+function init_medium(model::VelocityModel, nbc::Int, fd_order::Int,
+    backend::AbstractBackend; free_surface::Bool=true)
+    return init_medium(model.vp, model.vs, model.rho,
+        model.dx, model.dz, nbc, fd_order, backend;
+        free_surface=free_surface)
 end
 
 function _pad_array(data::Matrix, pad::Int)
     nx, nz = size(data)
-    result = zeros(Float32, nx + 2*pad, nz + 2*pad)
+    result = zeros(Float32, nx + 2 * pad, nz + 2 * pad)
     result[pad+1:pad+nx, pad+1:pad+nz] .= Float32.(data)
-    
+
     # Extend boundaries
     for i in 1:pad
         result[i, :] .= result[pad+1, :]
@@ -151,39 +151,39 @@ OPTIMIZATION: Division by rho is done once here, not in every time step!
 """
 function _compute_staggered_params_optimized(vp, vs, rho)
     nx, nz = size(vp)
-    
+
     # Basic Lamé parameters
-    mu = Float32.(rho .* vs.^2)
-    lam = Float32.(rho .* vp.^2 .- 2.0f0 .* mu)
-    
+    mu = Float32.(rho .* vs .^ 2)
+    lam = Float32.(rho .* vp .^ 2 .- 2.0f0 .* mu)
+
     # OPTIMIZED: Precompute lambda + 2*mu
     lam_2mu = Float32.(lam .+ 2.0f0 .* mu)
-    
+
     # OPTIMIZED: Precompute buoyancy (1/rho) instead of storing rho
     # This eliminates division in the velocity update kernel!
     buoy_vx = Float32.(1.0f0 ./ rho)
-    
+
     # Staggered buoyancy for vz (average then invert)
     buoy_vz = zeros(Float32, nx, nz)
     @inbounds for j in 1:nz-1
         for i in 1:nx-1
             # Average rho at staggered position, then invert
-            rho_avg = 0.25f0 * (rho[i,j] + rho[i+1,j] + rho[i,j+1] + rho[i+1,j+1])
+            rho_avg = 0.25f0 * (rho[i, j] + rho[i+1, j] + rho[i, j+1] + rho[i+1, j+1])
             buoy_vz[i, j] = 1.0f0 / rho_avg
         end
     end
     buoy_vz[nx, :] .= buoy_vz[nx-1, :]
     buoy_vz[:, nz] .= buoy_vz[:, nz-1]
-    
+
     # Harmonic average for mu at txz positions
     mu_txz = zeros(Float32, nx, nz)
     @inbounds for j in 1:nz-1
         for i in 1:nx
-            mu_txz[i, j] = 2.0f0 / (1.0f0/mu[i,j] + 1.0f0/mu[i,j+1])
+            mu_txz[i, j] = 2.0f0 / (1.0f0 / mu[i, j] + 1.0f0 / mu[i, j+1])
         end
     end
     mu_txz[:, nz] .= mu_txz[:, nz-1]
-    
+
     return lam, mu, mu_txz, buoy_vx, buoy_vz, lam_2mu
 end
 
@@ -192,40 +192,53 @@ end
 # ==============================================================================
 
 """
-    init_habc(nx, nz, nbc, dt, dx, dz, v_ref, backend)
+    init_habc(nx, nz, nbc, pad, dt, dx, dz, v_ref, backend)
 
 Initializes the Higdon Absorbing Boundary Condition (HABC) configuration.
 Computes extrapolation coefficients and spatial blending weight matrices.
+
+NOTE: 权重覆盖整个 pad 层（nbc + M），确保 FD stencil padding 区域也有吸收效果。
+      HABCConfig.nbc 存储的是 pad 值，apply_habc! 的范围是 j = 2 : pad。
 """
-function init_habc(nx::Int, nz::Int, nbc::Int, dt::Real, dx::Real, dz::Real, 
-                   v_ref::Real, backend::AbstractBackend)
-    
+function init_habc(nx::Int, nz::Int, nbc::Int, pad::Int, dt::Real, dx::Real, dz::Real,
+    v_ref::Real, backend::AbstractBackend)
+
     rx = Float32(v_ref * dt / dx)
     rz = Float32(v_ref * dt / dz)
     b_p = 0.45f0
     beta = 1.0f0
-    
+
     # Precompute extrapolation coefficients
     qx = Float32((b_p * (beta + rx) - rx) / ((beta + rx) * (1 - b_p)))
     qz = Float32((b_p * (beta + rz) - rz) / ((beta + rz) * (1 - b_p)))
     qt_x = Float32((b_p * (beta + rx) - beta) / ((beta + rx) * (1 - b_p)))
     qt_z = Float32((b_p * (beta + rz) - beta) / ((beta + rz) * (1 - b_p)))
     qxt = Float32(b_p / (b_p - 1.0f0))
-    
-    # Distance function for blending
+
+    # Distance function for blending - 使用 pad 而不是 nbc！
     dist(i, j) = min(i - 1, nx - i, j - 1, nz - j)
-    
-    # Generate weighting matrices
-    w_vx = [Float32(clamp((dist(i, j) - 0.0) / nbc, 0.0, 1.0)) for j in 1:nz, i in 1:nx]
-    w_vz = [Float32(clamp((dist(i, j) - 0.5) / nbc, 0.0, 1.0)) for j in 1:nz, i in 1:nx]
-    w_tau = [Float32(clamp((dist(i, j) - 0.75) / nbc, 0.0, 1.0)) for j in 1:nz, i in 1:nx]
-    
+
+    # Generate weighting matrices - 权重在整个 pad 层内过渡
+    # 注意：pad-1 是为了让 j=pad 时权重刚好为 1.0
+    w_vx = [Float32(clamp((dist(i, j) - 0.0) / (pad - 1), 0.0, 1.0)) for j in 1:nz, i in 1:nx]
+    w_vz = [Float32(clamp((dist(i, j) - 0.5) / (pad - 1), 0.0, 1.0)) for j in 1:nz, i in 1:nx]
+    w_tau = [Float32(clamp((dist(i, j) - 0.75) / (pad - 1), 0.0, 1.0)) for j in 1:nz, i in 1:nx]
+
+    # HABCConfig.nbc 存储 pad-1，这样 apply_habc! 中 j = 2 : nbc+1 = 2 : pad
     return HABCConfig(
-        nbc, qx, qz, qt_x, qt_z, qxt,
+        pad - 1,
+        qx, qz, qt_x, qt_z, qxt,
         to_device(w_vx, backend),
         to_device(w_vz, backend),
         to_device(w_tau, backend)
     )
+end
+
+# 保持向后兼容的旧接口（假设 8 阶 FD，M=4）
+function init_habc(nx::Int, nz::Int, nbc::Int, dt::Real, dx::Real, dz::Real,
+    v_ref::Real, backend::AbstractBackend)
+    pad = nbc + 4  # 默认 M=4
+    return init_habc(nx, nz, nbc, pad, dt, dx, dz, v_ref, backend)
 end
 
 # ==============================================================================
@@ -241,12 +254,12 @@ function setup_receivers(x::Vector{<:Real}, z::Vector{<:Real}, M::Medium; type::
     n = length(x)
     i_rec = Vector{Int}(undef, n)
     j_rec = Vector{Int}(undef, n)
-    
+
     for r in 1:n
         i_rec[r] = round(Int, x[r] / M.dx) + M.pad + 1
         j_rec[r] = round(Int, z[r] / M.dz) + M.pad + 1
     end
-    
+
     # Dummy data - will be replaced per shot
     data = zeros(Float32, 1, n)
     return Receivers(i_rec, j_rec, data, type)
