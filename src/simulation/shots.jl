@@ -1,7 +1,7 @@
 # ==============================================================================
-# simulation/shot_manager.jl
+# simulation/shots.jl
 #
-# Shot management - clean separation of single/multi-shot logic
+# Shot management - optimized for performance
 # ==============================================================================
 
 # ShotResult is defined in core/structures.jl
@@ -23,12 +23,12 @@ This function:
 
 # Keyword Arguments
 - `shot_id`: Shot identifier (default: 1)
-- `progress`: Show progress bar (default: true)
+- `progress`: Show progress bar (default: false for performance)
 - `on_step`: Callback function for each time step (e.g., VideoRecorder)
 """
 function run_shot!(backend::AbstractBackend, W::Wavefield, M::Medium, H::HABCConfig,
                    a, src::Source, rec::Receivers, params::SimParams;
-                   shot_id::Int=1, progress::Bool=true, on_step=nothing)
+                   shot_id::Int=1, progress::Bool=false, on_step=nothing)
     
     # Reset wavefield
     reset!(backend, W)
@@ -102,13 +102,13 @@ function MultiShotConfig(x_positions::Vector{<:Real}, z_positions::Vector{<:Real
 end
 
 # ==============================================================================
-# Multi-Shot Execution
+# Multi-Shot Execution (OPTIMIZED - Memory Reuse)
 # ==============================================================================
 
 """
-    run_shots!(backend, W, M, H, a, rec, shot_config, params; kwargs) -> Vector{ShotResult}
+    run_shots!(backend, W, M, H, a, rec_template, shot_config, params; kwargs) -> Vector{ShotResult}
 
-Run multiple shots and return all results.
+Run multiple shots with MEMORY REUSE for maximum performance.
 
 # Arguments
 - `backend`: Compute backend
@@ -116,39 +116,55 @@ Run multiple shots and return all results.
 - `M`: Medium
 - `H`: HABC configuration
 - `a`: FD coefficients
-- `rec`: Receivers (indices only, data will be reset)
+- `rec_template`: Receivers template (indices only, data will be allocated once)
 - `shot_config`: MultiShotConfig with shot positions
 - `params`: Simulation parameters
 
 # Keyword Arguments
 - `on_shot_complete`: Callback `f(result::ShotResult)` called after each shot
 - `on_step`: Callback for each time step (e.g., VideoRecorder)
-- `progress`: Show progress for each shot
+- `progress`: Show progress for each shot (default: false)
+- `verbose`: Print shot progress info (default: true)
 """
 function run_shots!(backend::AbstractBackend, W::Wavefield, M::Medium, H::HABCConfig,
                     a, rec_template::Receivers, shot_config::MultiShotConfig, params::SimParams;
-                    on_shot_complete=nothing, on_step=nothing, progress::Bool=true)
+                    on_shot_complete=nothing, on_step=nothing, progress::Bool=false,
+                    verbose::Bool=true)
     
     n_shots = length(shot_config.shots)
     results = Vector{ShotResult}(undef, n_shots)
     
-    # Prepare wavelet on device
+    # Prepare wavelet on device ONCE
     wavelet_device = to_device(shot_config.wavelet, backend)
     
-    @info "Running $n_shots shots on $(typeof(backend))"
+    # PRE-ALLOCATE receiver data buffer ONCE (will be reused)
+    rec = _create_receivers(backend, rec_template, params.nt)
+    
+    if verbose
+        @info "Running shots" n_shots=n_shots backend=typeof(backend)
+    end
+    
+    t_start = time()
     
     for (i, shot) in enumerate(shot_config.shots)
-        @info "Shot $i/$n_shots at ($(shot.source_x), $(shot.source_z))"
-        
-        # Create source for this shot
+        # Create source for this shot (lightweight - only indices change)
         src = _create_source(backend, M, shot, wavelet_device)
         
-        # Create fresh receiver data buffer
-        rec = _create_receivers(backend, rec_template, params.nt)
+        # REUSE receiver buffer - just clear data (no reallocation)
+        fill!(rec.data, 0.0f0)
         
-        # Run shot with optional step callback
-        result = run_shot!(backend, W, M, H, a, src, rec, params;
-                          shot_id=shot.shot_id, progress=progress, on_step=on_step)
+        # Reset wavefield
+        reset!(backend, W)
+        
+        # Run time loop
+        run_time_loop!(backend, W, M, H, a, src, rec, params;
+                      progress=progress, on_step=on_step)
+        
+        # Get result
+        gather = _get_gather(backend, rec)
+        rec_i = _to_cpu_vec(rec.i)
+        rec_j = _to_cpu_vec(rec.j)
+        result = ShotResult(gather, shot.shot_id, src.i, src.j, rec_i, rec_j)
         
         results[i] = result
         
@@ -156,10 +172,66 @@ function run_shots!(backend::AbstractBackend, W::Wavefield, M::Medium, H::HABCCo
         if on_shot_complete !== nothing
             on_shot_complete(result)
         end
+        
+        # Minimal progress output (every 10% or at end)
+        if verbose && (i % max(1, n_shots ÷ 10) == 0 || i == n_shots)
+            elapsed = time() - t_start
+            avg_time = elapsed / i
+            eta = avg_time * (n_shots - i)
+            @info "Shot progress" completed="$i/$n_shots" elapsed_s=round(elapsed, digits=1) eta_s=round(eta, digits=1)
+        end
     end
     
-    @info "All shots completed"
+    if verbose
+        total_time = time() - t_start
+        @info "All shots completed" total_s=round(total_time, digits=2) per_shot_s=round(total_time/n_shots, digits=3)
+    end
+    
     return results
+end
+
+# ==============================================================================
+# FAST Multi-Shot (Minimal Overhead)
+# ==============================================================================
+
+"""
+    run_shots_fast!(backend, W, M, H, a, rec_template, shot_config, params) -> Vector{Matrix{Float32}}
+
+Ultra-fast multi-shot execution with minimal overhead.
+Returns only gather matrices (no ShotResult wrapper).
+No logging, no callbacks - pure computation.
+"""
+function run_shots_fast!(backend::AbstractBackend, W::Wavefield, M::Medium, H::HABCConfig,
+                         a, rec_template::Receivers, shot_config::MultiShotConfig, params::SimParams)
+    
+    n_shots = length(shot_config.shots)
+    gathers = Vector{Matrix{Float32}}(undef, n_shots)
+    
+    # Prepare wavelet on device ONCE
+    wavelet_device = to_device(shot_config.wavelet, backend)
+    
+    # PRE-ALLOCATE receiver data buffer ONCE
+    rec = _create_receivers(backend, rec_template, params.nt)
+    
+    for (i, shot) in enumerate(shot_config.shots)
+        # Reset wavefield
+        reset!(backend, W)
+        
+        # Create source
+        src = _create_source(backend, M, shot, wavelet_device)
+        
+        # Clear receiver data
+        fill!(rec.data, 0.0f0)
+        
+        # Run simulation (no progress, no callbacks)
+        run_time_loop!(backend, W, M, H, a, src, rec, params; 
+                       progress=false, on_step=nothing)
+        
+        # Copy gather to CPU
+        gathers[i] = _get_gather(backend, rec)
+    end
+    
+    return gathers
 end
 
 # ==============================================================================
