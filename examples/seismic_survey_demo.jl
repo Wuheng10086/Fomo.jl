@@ -66,6 +66,7 @@ function seismic_survey_demo()
     println("\n1. Scenario: No Surface Waves (Absorbing Boundary)")
     model1 = create_layered_model("no_sw")
 
+    mkpath("outputs/survey_demo/1_no_surface_waves")
     plot_setup(model1, [sources[1][1]], [sources[1][2]], rec_x, rec_z;
         title="Scenario 1: No Surface Waves (Absorbing)",
         output="outputs/survey_demo/1_no_surface_waves/setup.png"
@@ -86,6 +87,7 @@ function seismic_survey_demo()
     println("\n2. Scenario: Surface Waves (Explicit Free Surface)")
     model2 = create_layered_model("explicit_sw")
 
+    mkpath("outputs/survey_demo/2_explicit_surface_waves")
     plot_setup(model2, [sources[1][1]], [sources[1][2]], rec_x, rec_z;
         title="Scenario 2: Surface Waves (Explicit Free Surface)",
         output="outputs/survey_demo/2_explicit_surface_waves/setup.png"
@@ -118,6 +120,7 @@ function seismic_survey_demo()
     # Interface depth is 50m.
     rec_z_vac = fill(50.0f0, length(rec_x))
 
+    mkpath("outputs/survey_demo/3_vacuum_flat")
     plot_setup(model3, [sources_vac[1][1]], [sources_vac[1][2]], rec_x, rec_z_vac;
         title="Scenario 3: Surface Waves (Vacuum Flat)",
         output="outputs/survey_demo/3_vacuum_flat/setup.png"
@@ -173,6 +176,7 @@ function seismic_survey_demo()
         rec_z_topo[i] = Float32(grid_z_idx * dz)
     end
 
+    mkpath("outputs/survey_demo/4_vacuum_topo")
     plot_setup(model4, [sources_topo[1][1]], [sources_topo[1][2]], rec_x, rec_z_topo;
         title="Scenario 4: Surface Waves (Vacuum Topo)",
         output="outputs/survey_demo/4_vacuum_topo/setup.png"
