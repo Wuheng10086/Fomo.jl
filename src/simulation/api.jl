@@ -9,40 +9,23 @@
 # ==============================================================================
 
 """
-    SimulationConfig(; kwargs...)
+    SimulationConfig
 
 Configuration parameters for the simulation.
 
-# Keyword Arguments
-- `nbc::Int = 50`: Number of absorbing boundary layers (HABC) on sides/bottom.
-- `fd_order::Int = 8`: Finite difference order (spatial accuracy). Options: 2, 4, 6, 8, 10.
-- `dt::Union{Float32, Nothing} = nothing`: Time step in seconds. If `nothing`, computed automatically based on CFL.
-- `nt::Int = 3000`: Total number of time steps to simulate.
-- `cfl::Float32 = 0.4f0`: CFL stability number (Courant-Friedrichs-Lewy). Recommended: 0.3-0.5.
-- `f0::Float32 = 15.0f0`: Dominant frequency of the source wavelet (Hz).
-- `free_surface::Bool = true`: [Legacy] Enable free surface boundary at top. Prefer using `boundary_config`.
-- `output_dir::String = "outputs"`: Directory where results will be saved.
-- `save_gather::Bool = true`: Whether to save the seismic gather data to disk.
-- `show_progress::Bool = true`: Display simulation progress bar.
-- `plot_gather::Bool = true`: Generate and save a PNG plot of the gather.
-- `boundary_config::Union{BoundaryConfig, Nothing} = nothing`: Advanced boundary configuration object.
-
-# Returns
-- `SimulationConfig`: A configuration object to be passed to `simulate!` or `seismic_survey`.
-
-# Example
-```julia
-# Basic configuration
-config = SimulationConfig(nt=2000, f0=25.0f0)
-
-# High-accuracy configuration
-config = SimulationConfig(
-    nt=5000, 
-    fd_order=10, 
-    cfl=0.3f0,
-    output_dir="high_res_run"
-)
-```
+# Fields
+- `nbc::Int`: Number of absorbing boundary layers (HABC)
+- `fd_order::Int`: Finite difference order
+- `dt::Union{Float32, Nothing}`: Time step in seconds
+- `nt::Int`: Number of time steps
+- `cfl::Float32`: CFL stability number
+- `f0::Float32`: Source dominant frequency (Hz)
+- `free_surface::Bool`: Enable free surface (legacy)
+- `output_dir::String`: Output directory
+- `save_gather::Bool`: Save binary gather
+- `show_progress::Bool`: Show progress bar
+- `plot_gather::Bool`: Save gather plot
+- `boundary_config::Union{BoundaryConfig, Nothing}`: Advanced boundary configuration
 """
 struct SimulationConfig
     nbc::Int
@@ -59,7 +42,36 @@ struct SimulationConfig
     boundary_config::Union{BoundaryConfig,Nothing}
 end
 
-# Constructor with keyword arguments and default values
+"""
+    SimulationConfig(; kwargs...)
+
+Configuration for regular (flat) free surface simulation.
+
+# Keyword Arguments
+- `nbc::Int = 50`: Number of absorbing boundary layers (PML/HABC)
+- `fd_order::Int = 8`: Finite difference order, must be even. Options: `2`, `4`, `6`, `8`, `10`
+- `dt::Union{Float32, Nothing} = nothing`: Time step in seconds. If `nothing`, auto-computed from CFL condition
+- `nt::Int = 3000`: Number of time steps
+- `cfl::Float32 = 0.4f0`: CFL number for auto time step computation (typically 0.3-0.5)
+- `f0::Float32 = 15.0f0`: Source dominant frequency in Hz
+- `free_surface::Bool = true`: Enable free surface at top boundary
+- `output_dir::String = "outputs"`: Directory for output files
+- `save_gather::Bool = true`: Save seismic gather to binary file
+- `show_progress::Bool = true`: Show progress bar during simulation
+- `plot_gather::Bool = true`: Save gather plot as PNG
+
+# Example
+```julia
+config = SimulationConfig(
+    nt = 5000,
+    f0 = 20.0f0,
+    fd_order = 8,
+    output_dir = "my_outputs"
+)
+```
+
+See also: [`simulate!`](@ref), [`VideoConfig`](@ref)
+"""
 function SimulationConfig(;
     nbc::Int=50,
     fd_order::Int=8,
@@ -67,12 +79,12 @@ function SimulationConfig(;
     nt::Int=3000,
     cfl::Float32=0.4f0,
     f0::Float32=15.0f0,
-    free_surface::Bool=true,
+    free_surface::Bool=true,  # Legacy parameter
     output_dir::String="outputs",
     save_gather::Bool=true,
     show_progress::Bool=true,
     plot_gather::Bool=true,
-    boundary_config::Union{BoundaryConfig,Nothing}=nothing
+    boundary_config::Union{BoundaryConfig,Nothing}=nothing  # New parameter
 )
     # If boundary_config is not provided, create from legacy free_surface
     actual_boundary_config = boundary_config
@@ -90,15 +102,19 @@ end
 """
     IrregularSurfaceConfig(; kwargs...)
 
-Configuration for irregular free surface (topography) simulation using vacuum formulation.
+Configuration for irregular free surface simulation using Immersed Boundary Method (IBM).
 
 # Keyword Arguments
 - `nbc::Int = 50`: Number of absorbing boundary layers
 - `fd_order::Int = 8`: Finite difference order. Options: `2`, `4`, `6`, `8`, `10`
 - `dt::Union{Float32, Nothing} = nothing`: Time step in seconds. If `nothing`, auto-computed
 - `nt::Int = 3000`: Number of time steps
-- `cfl::Float32 = 0.5f0`: CFL number
+- `cfl::Float32 = 0.5f0`: CFL number (use smaller value ~0.4 for `:mirror` method)
 - `f0::Float32 = 15.0f0`: Source dominant frequency in Hz
+- `ibm_method::Symbol = :direct_zero`: IBM boundary condition method
+  - `:direct_zero` - Directly set ghost point values to zero. **Stable**, recommended for most cases
+  - `:mirror` - Mirror/antisymmetric extrapolation. **Higher accuracy** but may need smaller time step
+- `ibm_iterations::Int = 3`: Number of IBM iterations per time step (3-5 recommended)
 - `src_depth::Float32 = 30.0f0`: Source depth below surface in meters
 - `rec_depth::Float32 = 0.0f0`: Receiver depth below surface in meters (0 = on surface)
 - `output_dir::String = "outputs"`: Directory for output files
@@ -112,6 +128,8 @@ Configuration for irregular free surface (topography) simulation using vacuum fo
 config = IrregularSurfaceConfig(
     nt = 4000,
     f0 = 20.0f0,
+    ibm_method = :direct_zero,  # or :mirror
+    ibm_iterations = 3,
     src_depth = 50.0f0,         # source 50m below surface
     rec_depth = 0.0f0,          # receivers on surface
     output_dir = "irregular_outputs"
@@ -119,10 +137,11 @@ config = IrregularSurfaceConfig(
 ```
 
 # Notes
-- IBM boundary method has been removed; this config assumes vacuum formulation.
+- `:direct_zero` is more stable and works well for most topographies
+- `:mirror` provides higher accuracy but may become unstable with sharp topography
 - If simulation becomes unstable, try reducing `cfl` to 0.3-0.4
 
-See also: [`init_medium_vacuum`](@ref), [`setup_vacuum_formulation!`](@ref)
+See also: [`simulate_irregular!`](@ref), [`VideoConfig`](@ref)
 """
 Base.@kwdef struct IrregularSurfaceConfig
     nbc::Int = 50
@@ -131,6 +150,8 @@ Base.@kwdef struct IrregularSurfaceConfig
     nt::Int = 3000
     cfl::Float32 = 0.5f0
     f0::Float32 = 15.0f0
+    ibm_method::Symbol = :direct_zero
+    ibm_iterations::Int = 3
     src_depth::Float32 = 30.0f0
     rec_depth::Float32 = 0.0f0
     output_dir::String = "outputs"
@@ -143,7 +164,7 @@ end
 """
     SimulationResult
 
-Container for simulation results returned by `simulate!`.
+Container for simulation results returned by `simulate!` and `simulate_irregular!`.
 
 # Fields
 - `gather::Matrix{Float32}`: Recorded seismogram, shape `[nt, n_receivers]`
@@ -200,7 +221,7 @@ Automatically handles:
 - `config::SimulationConfig`: Simulation configuration (required)
 - `video_config::Union{VideoConfig, Nothing} = nothing`: Video recording configuration. 
   If `nothing`, no video is recorded
-- `be::AbstractBackend`: Backend to use `backend(:cpu)` or `backend(:cuda)`. Default auto-selects CUDA if available.
+- `be::Backend`: Backend to use Backend(:cpu) or Backend(:cuda). Default is Backend(:cuda).
 
 # Returns
 - `SimulationResult`: Contains gather data and paths to output files
@@ -245,13 +266,11 @@ function simulate!(model::VelocityModel,
     rec_x::Vector{<:Real}, rec_z::Vector{<:Real};
     config::SimulationConfig=SimulationConfig(),
     video_config::Union{VideoConfig,Nothing}=nothing,
-    be::Union{AbstractBackend,Nothing}=nothing,
-    source_type::Symbol=:pressure,
-    stress_component::Symbol=:txx)
+    be=backend(:cuda))
 
     mkpath(config.output_dir)
 
-    be = be === nothing ? (is_cuda_available() ? backend(:cuda) : backend(:cpu)) : be
+    #be = is_cuda_available() ? backend(:cuda) : backend(:cpu)
     @info "Simulation started" backend = typeof(be) model = model.name
 
     vp_max = maximum(model.vp)
@@ -287,14 +306,7 @@ function simulate!(model::VelocityModel,
     src_i = round(Int, src_x / model.dx) + medium.pad + 1
     src_j = round(Int, src_z / model.dz) + medium.pad + 1
     wavelet = ricker_wavelet(config.f0, dt, config.nt)
-    wavelet_dev = to_device(wavelet, be)
-    src = if source_type == :pressure
-        Source(src_i, src_j, wavelet_dev)
-    elseif source_type == :stress
-        StressSource(src_i, src_j, wavelet_dev, stress_component)
-    else
-        error("Unknown source_type: $source_type. Use :pressure or :stress")
-    end
+    src = Source(src_i, src_j, to_device(wavelet, be))
 
     n_rec = length(rec_x)
     rec_i = [round(Int, x / model.dx) + medium.pad + 1 for x in rec_x]
@@ -354,7 +366,7 @@ end
 """
     simulate_irregular!(model, z_surface, src_x, rec_x; config, video_config=nothing) -> SimulationResult
 
-Run elastic wave simulation with irregular free surface using vacuum formulation.
+Run elastic wave simulation with irregular free surface using Immersed Boundary Method (IBM).
 
 The surface shape is defined by `z_surface`, which specifies the depth at each x grid point.
 Source and receiver positions are specified relative to the surface (depth below surface).
@@ -410,6 +422,7 @@ result = simulate_irregular!(
     Float32.(100:20:3900);         # receiver x positions
     config = IrregularSurfaceConfig(
         nt = 3000,
+        ibm_method = :direct_zero,
         src_depth = 30.0f0,        # 30m below surface
         rec_depth = 0.0f0          # on surface
     ),
@@ -434,7 +447,7 @@ function apply_boundary_conditions!(be::AbstractBackend, W::Wavefield, M::Medium
 
     # Apply free surface condition if enabled
     if M.is_free_surface
-        apply_free_surface!(be, W, M, params.M)
+        apply_free_surface!(be, W, M)
     end
 end
 
@@ -824,7 +837,7 @@ end
 #function _plot_irregular_setup(model::VelocityModel, z_surface::Vector{Float32},
 #    src_x::Real, src_depth::Real,
 #    rec_x::Vector{Float32}, rec_depth::Vector{Float32},
-#    surface_method::Symbol, output::String)
+#    ibm_method::Symbol, output::String)
 #
 #    fig = CairoMakie.Figure(size=(1000, 700))
 #
@@ -833,7 +846,7 @@ end
 #
 #    ax = CairoMakie.Axis(fig[1, 1],
 #        xlabel="X (m)", ylabel="Z (m)",
-#        title="Model with Irregular Surface",
+#        title="Model with Irregular Surface (IBM: $ibm_method)",
 #        aspect=CairoMakie.DataAspect())
 #
 #    hm = CairoMakie.heatmap!(ax, x_axis, z_axis, model.vp', colormap=:viridis)
@@ -937,11 +950,8 @@ function seismic_survey(model, sources, receivers;
     end
 
     # Parse receivers
-    rec_x_val = receivers[1]
-    rec_z_val = receivers[2]
-
-    rec_x = rec_x_val isa Real ? [Float32(rec_x_val)] : Float32.(rec_x_val)
-    rec_z = rec_z_val isa Real ? [Float32(rec_z_val)] : Float32.(rec_z_val)
+    rec_x = Float32.(receivers[1])
+    rec_z = Float32.(receivers[2])
 
     # ===========================
     # Handle different surface methods
@@ -1045,7 +1055,7 @@ function seismic_survey(model, sources, receivers;
         return simulate!(expanded_model, src_x, adjusted_src_z, rec_x, adjusted_rec_z;
             config=new_config, video_config=video_config)
 
-    else  # :image
+    elseif surface_method == :image
         # Use explicit free surface boundary condition (Image Method)
         println("Using explicit free surface boundary condition (Image Method)")
 

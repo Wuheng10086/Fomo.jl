@@ -5,32 +5,17 @@
 # ==============================================================================
 
 """
-    BoundaryConfig(; kwargs...)
+    BoundaryConfig
 
-Configuration for boundary conditions on all sides of the simulation domain.
+Configuration for boundary conditions on all sides of the model.
 
-# Keyword Arguments
-- `top_boundary::Symbol = :image`: Top boundary condition.
-  - `:image`: Image method (stress-free surface).
-  - `:absorbing`: Absorbing boundary (no surface waves).
-  - `:vacuum`: Vacuum formulation (for topography).
-- `bottom_boundary::Symbol = :absorbing`: Bottom boundary condition (`:absorbing`, `:image`).
-- `left_boundary::Symbol = :absorbing`: Left boundary condition (`:absorbing`, `:periodic`).
-- `right_boundary::Symbol = :absorbing`: Right boundary condition (`:absorbing`, `:periodic`).
-- `nbc::Int = 50`: Number of absorbing boundary layers (PML/HABC thickness).
-- `top_padding::Int = 0`: Additional padding layers at the top (useful if source is very close to boundary).
-
-# Returns
-- `BoundaryConfig`: A configuration object.
-
-# Example
-```julia
-# Standard survey with free surface
-bc = BoundaryConfig(top_boundary=:image, nbc=50)
-
-# Full absorbing boundaries (infinite medium)
-bc_abs = BoundaryConfig(top_boundary=:absorbing)
-```
+# Fields
+- `top_boundary::Symbol`: Top boundary condition (:absorbing, :image, :vacuum)
+- `bottom_boundary::Symbol`: Bottom boundary condition (:absorbing, :image)
+- `left_boundary::Symbol`: Left boundary condition (:absorbing, :periodic)
+- `right_boundary::Symbol`: Right boundary condition (:absorbing, :periodic)
+- `nbc::Int`: Number of absorbing boundary layers
+- `top_padding::Int`: Additional padding layers at top (for sources near boundary)
 """
 struct BoundaryConfig
     top_boundary::Symbol    # :absorbing, :image, :vacuum
@@ -43,7 +28,7 @@ end
 
 # Default constructor
 function BoundaryConfig(;
-    top_boundary::Symbol=:image,
+    top_boundary::Symbol=:free_surface,
     bottom_boundary::Symbol=:absorbing,
     left_boundary::Symbol=:absorbing,
     right_boundary::Symbol=:absorbing,

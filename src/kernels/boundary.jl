@@ -222,7 +222,7 @@ end
 Apply stress-free boundary condition at top (z=0) using Image Method.
 Sets stress to zero at surface and applies antisymmetric mirroring to ghost points.
 """
-function apply_image_method!(::CPUBackend, W::Wavefield, M::Medium, M_order::Int)
+function apply_image_method!(::CPUBackend, W::Wavefield, M::Medium)
     if !M.is_free_surface
         return nothing
     end
@@ -230,23 +230,11 @@ function apply_image_method!(::CPUBackend, W::Wavefield, M::Medium, M_order::Int
     nx = M.nx
     j_fs = M.pad + 1
 
-    # 1. Surface condition: Stress is zero at free surface
-    @inbounds @simd for i in 1:nx
-        W.tzz[i, j_fs] = 0.0f0
-        W.txz[i, j_fs] = 0.0f0
-    end
-
-    # 2. Image Method: Antisymmetric mirroring for ghost points
-    # Ghost points: j_fs - k
-    # Source points: j_fs + k
-    # Range: k = 1 to M_order (sufficient for FD stencil)
-    @inbounds for k in 1:M_order
-        j_ghost = j_fs - k
-        j_source = j_fs + k
-
+    # Vectorized loop
+    @inbounds for j in j_fs-5:j_fs
         @simd for i in 1:nx
-            W.tzz[i, j_ghost] = -W.tzz[i, j_source]
-            W.txz[i, j_ghost] = -W.txz[i, j_source]
+            W.tzz[i, j] = 0.0f0
+            W.txz[i, j] = 0.0f0
         end
     end
     return nothing
@@ -422,18 +410,19 @@ end
 # 删除旧的合并kernel
 # function _habc_kernel_optimized! 已被上面两个kernel替代
 
-function apply_image_method!(::CUDABackend, W::Wavefield, M::Medium, M_order::Int)
+function apply_image_method!(::CUDABackend, W::Wavefield, M::Medium)
     if !M.is_free_surface
         return nothing
     end
 
     nx = M.nx
     j_fs = M.pad + 1
-
+    M_order = 5 # Should be passed or retrieved from M/params
+    
     # Threads cover x dimension (256) and layers (1)
     # We use blockIdx.y to handle multiple layers (surface + ghosts)
     total_layers = M_order + 1
-
+    
     threads = (256, 1)
     blocks = (cld(nx, 256), total_layers)
 
@@ -443,22 +432,12 @@ end
 
 function _image_method_kernel!(tzz, txz, nx, j_fs, M_order)
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
-    k = blockIdx().y - 1 # 0 = surface, 1..M_order = ghosts
+    j_offset = blockIdx().y - 1
+    j = j_fs - 5 + j_offset
 
-    if i <= nx && k <= M_order
-        if k == 0
-            # Surface
-            @inbounds tzz[i, j_fs] = 0.0f0
-            @inbounds txz[i, j_fs] = 0.0f0
-        else
-            # Ghost layer (k > 0)
-            j_ghost = j_fs - k
-            j_source = j_fs + k
-
-            # Antisymmetric mirroring
-            @inbounds tzz[i, j_ghost] = -tzz[i, j_source]
-            @inbounds txz[i, j_ghost] = -txz[i, j_source]
-        end
+    if i <= nx && j >= 1 && j <= j_fs
+        @inbounds tzz[i, j] = 0.0f0
+        @inbounds txz[i, j] = 0.0f0
     end
     return nothing
 end
