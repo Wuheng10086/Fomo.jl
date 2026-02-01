@@ -55,28 +55,17 @@ end
 """
     init_medium(vp, vs, rho, dx, dz, nbc, fd_order, backend; free_surface=true)
 
-Initialize the `Medium` structure which holds material properties and precomputed fields.
-Automatically handles padding for absorbing boundaries (HABC) and finite difference stencils.
+Initialize Medium with material properties.
+OPTIMIZED: Precomputes buoyancy (1/rho) and lam_2mu (lambda + 2*mu)
+          to eliminate expensive divisions in the simulation loop.
 
 # Arguments
-- `vp::Matrix`: P-wave velocity array [nz, nx].
-- `vs::Matrix`: S-wave velocity array [nz, nx].
-- `rho::Matrix`: Density array [nz, nx].
-- `dx::Real`: Grid spacing in X (meters).
-- `dz::Real`: Grid spacing in Z (meters).
-- `nbc::Int`: Number of boundary layers for HABC.
-- `fd_order::Int`: Finite difference order (e.g., 8).
-- `backend::AbstractBackend`: Computation backend (`backend(:cpu)` or `backend(:cuda)`).
-
-# Keyword Arguments
-- `free_surface::Bool = true`: Whether to enable free surface boundary condition at the top.
-
-# Returns
-- `Medium`: A struct containing padded material properties and precomputed buoyancy/moduli on the device.
-
-# Note
-- Input arrays should follow seismic convention `[nz, nx]` (depth, offset).
-- Internally, arrays are transposed to `[nx, nz]` for optimal memory access.
+- `vp`, `vs`, `rho`: Velocity and density arrays [nz, nx] (seismic convention)
+- `dx`, `dz`: Grid spacing
+- `nbc`: Boundary layer thickness
+- `fd_order`: Finite difference order
+- `backend`: Target backend (CPU_BACKEND or CUDA_BACKEND)
+- `free_surface`: Enable free surface at top
 """
 function init_medium(vp::Matrix, vs::Matrix, rho::Matrix,
     dx::Real, dz::Real, nbc::Int, fd_order::Int,

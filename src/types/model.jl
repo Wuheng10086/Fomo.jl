@@ -98,22 +98,7 @@ end
 """
     resample_model(model::VelocityModel, new_dx, new_dz) -> VelocityModel
 
-Resample the velocity model to a new grid spacing using bilinear interpolation.
-Useful for upscaling (refining) or downscaling (coarsening) the model.
-
-# Arguments
-- `model::VelocityModel`: The input velocity model.
-- `new_dx::Real`: The new grid spacing in X direction (meters).
-- `new_dz::Real`: The new grid spacing in Z direction (meters).
-
-# Returns
-- `VelocityModel`: A new model instance with the specified grid spacing and interpolated properties.
-
-# Example
-```julia
-# Upscale model from 10m to 5m spacing
-fine_model = resample_model(coarse_model, 5.0, 5.0)
-```
+Resample model to new grid spacing using bilinear interpolation.
 """
 function resample_model(model::VelocityModel, new_dx::Real, new_dz::Real)
     # Compute new dimensions

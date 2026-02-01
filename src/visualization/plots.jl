@@ -17,25 +17,14 @@
     plot_setup(model::VelocityModel, x_src, z_src, x_rec, z_rec; 
                output=nothing, title="Survey Setup")
 
-Visualize the velocity model along with source and receiver positions.
-Useful for verifying the geometry before running a simulation.
+Plot Vp model with source and receiver positions for visual verification.
 
 # Arguments
-- `model::VelocityModel`: The velocity model to plot.
-- `x_src::AbstractVector`, `z_src::AbstractVector`: Vectors of source coordinates (meters).
-- `x_rec::AbstractVector`, `z_rec::AbstractVector`: Vectors of receiver coordinates (meters).
-
-# Keyword Arguments
-- `output::Union{String, Nothing} = nothing`: Path to save the plot (e.g., "setup.png"). If `nothing`, defaults to `<model_name>_setup.png`.
-- `title::String = "Survey Setup Check"`: Title of the plot.
-
-# Returns
-- `Figure`: The Makie figure object containing the plot.
-
-# Example
-```julia
-plot_setup(model, [1000.0], [50.0], rec_x, rec_z; output="geometry.png")
-```
+- `model`: VelocityModel struct  
+- `x_src`, `z_src`: Source positions (meters)
+- `x_rec`, `z_rec`: Receiver positions (meters)
+- `output`: Output file path (default: "<model_name>_setup.png")
+- `title`: Plot title
 """
 function plot_setup(model::VelocityModel,
     x_src::AbstractVector, z_src::AbstractVector,
@@ -135,29 +124,20 @@ end
 # ==============================================================================
 
 """
-    plot_gather(gather, rec_x, dt; kwargs...)
+    plot_gather(gather, rec_x, dt; 
+                title="Shot Gather", output_path=nothing, 
+                clip_percentile=0.99, scale=1.0)
 
-Plot a seismic shot gather (seismogram) with time and distance axes.
+Plot seismic shot gather with proper time and distance axes.
 
 # Arguments
-- `gather::Matrix{Float32}`: The seismic data matrix of shape `[nt, n_receivers]`.
-- `rec_x::Vector{<:Real}`: X-coordinates of receivers (for X-axis labels).
-- `dt::Real`: Time sampling interval in seconds (for Y-axis labels).
-
-# Keyword Arguments
-- `title::String = "Shot Gather"`: Plot title.
-- `output_path::Union{String, Nothing} = nothing`: If provided, save plot to this file path.
-- `clip_percentile::Real = 0.99`: Percentile for amplitude clipping (gain). 0.99 means 99th percentile.
-- `scale::Real = 1.0`: Additional scaling factor for visualization.
-
-# Returns
-- `Figure`: The Makie figure object.
-
-# Example
-```julia
-plot_gather(result.gather, rec_x, dt; 
-            title="Shot 1", output_path="shot1.png", clip_percentile=0.98)
-```
+- `gather::Matrix{Float32}`: [nt × nrec] seismic gather
+- `rec_x::Vector{<:Real}`: Receiver x-coordinates (for x-axis labels)
+- `dt::Real`: Time sampling interval [s]
+- `title::String`: Plot title
+- `output_path::Union{String,Nothing}`: Output file path (optional)
+- `clip_percentile::Real`: Amplitude clipping percentile (0.99 = 99th percentile)
+- `scale::Real`: Amplitude scaling factor
 """
 function plot_gather(gather::Matrix{Float32},
     rec_x::Vector{<:Real},
