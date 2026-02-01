@@ -69,7 +69,7 @@ result = seismic_survey(
     model,
     (src_x, src_z),
     (rec_x, rec_z);
-    surface_method = :vacuum,    # :vacuum, :free_surface, or :absorbing
+    surface_method = :image,    # :vacuum, :image, or :absorbing
     vacuum_layers = 5,
     config = SimulationConfig(nt=1000, f0=20.0f0)
 )
@@ -133,7 +133,7 @@ julia -t auto examples/seismic_survey_demo.jl
 | Method | Surface Waves | Use Case |
 |--------|--------------|----------|
 | `:absorbing` | ❌ | Body waves only |
-| `:image` | ✅ | Accurate flat surface BC |
+| `:image` | ✅ | Accurate flat surface BC (Image Method) |
 | `:vacuum` | ✅ | Unified approach (recommended) |
 
 **Surface wave comparison** — Both methods produce Rayleigh waves, with nearly identical results:
@@ -230,16 +230,30 @@ If you use ElasticWave2D.jl in your research, please cite:
 }
 ```
 
-## Why I Built This
+## Project Structure
 
-As a geophysics student, I struggled with existing tools:
+The project follows a domain-driven structure to ensure clarity and maintainability:
 
-- **SOFI3D, Specfem2D** — Require Linux, `make`, MPI configuration... I spent more time debugging compilation errors than doing actual research.
-- **PML boundaries** — Widely used but computationally expensive. HABC achieves similar absorption with fewer layers and less computation.
+```
+ElasticWave2D.jl/
+├── src/
+│   ├── compute/            # Hardware abstraction (CPU/GPU)
+│   ├── core/               # Fundamental types (Wavefield, Medium, Configs)
+│   ├── physics/            # Numerical kernels (Velocity, Stress, Boundaries)
+│   ├── initialization/     # Setup routines (Media, Topography)
+│   ├── solver/             # Time-stepping and orchestration logic
+│   ├── workflow/           # High-level User APIs
+│   ├── io/                 # Input/Output (Models, Seismic Data)
+│   └── visualization/      # Plotting and Video generation
+├── examples/               # Usage examples
+├── tests/                  # Unit and integration tests
+├── docs/                   # Documentation
+└── scripts/                # Utility scripts
+```
 
-So I built ElasticWave2D.jl: a tool that **just works** — `Pkg.add()` and you're ready to go. No cmake, no Fortran compiler, no MPI headaches. 
+## Contributing
 
-If you're a student who just wants to run some simulations and learn wave physics, this is for you.
+We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 ## License
 

@@ -240,6 +240,29 @@ result = simulate!(model, src_x, src_z, rec_x, rec_z;
 
 如果你是一个只想跑几个模拟、学习波动物理的学生，这个项目就是为你准备的。
 
+## 目录结构
+
+本项目采用领域驱动设计（Domain-Driven Design）重构了目录结构，以确保清晰度和可维护性：
+
+```
+ElasticWave2D.jl/
+├── src/
+│   ├── compute/            # 算力后端 (CPU/GPU 抽象层)
+│   ├── core/               # 核心类型 (Wavefield, Medium, Configs)
+│   ├── physics/            # 物理内核 (速度/应力更新, 边界条件)
+│   ├── initialization/     # 初始化例程 (介质建模, 地形生成)
+│   ├── solver/             # 求解器 (时间步进, 炮集管理, 并行计算)
+│   ├── workflow/           # 工作流 (高级用户 API)
+│   ├── io/                 # 数据读写 (模型加载, 地震数据 IO)
+│   └── visualization/      # 可视化 (绘图与视频生成)
+├── examples/               # 使用示例
+├── tests/                  # 单元与集成测试
+├── docs/                   # 文档
+└── scripts/                # 实用脚本
+```
+
+## 贡献
+
 ## 许可证
 
 MIT License
