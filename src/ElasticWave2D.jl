@@ -69,7 +69,7 @@ export BoundaryConfig
 
 # --- Initialization ---
 export init_medium, init_wavefield, init_habc, setup_receivers
-export get_fd_coefficients, ricker_wavelet
+export get_fd_coefficients
 export init_medium_vacuum
 export setup_vacuum_formulation!, compute_staggered_params_vacuum
 export apply_vacuum_mask!, compute_surface_indices
@@ -78,6 +78,10 @@ export flat_surface, sinusoidal_surface
 export gaussian_valley, gaussian_hill, tilted_surface, step_surface
 export random_surface, combine_surfaces
 export validate_surface_elevation
+
+# --- Wavelet (★ NEW) ---
+export ricker_wavelet, gaussian_wavelet
+export normalize_wavelet, wavelet_info, validate_external_wavelet
 
 # --- Physics (Kernels) ---
 export update_velocity!, update_stress!
@@ -131,6 +135,7 @@ include("physics/wave_propagation/stress_kernel.jl")
 include("physics/boundaries/absorbing_boundary.jl")
 include("physics/boundaries/vacuum_boundary.jl")
 include("physics/interaction/source_receiver_kernel.jl")
+include("physics/interaction/wavelet.jl")  # ★ NEW: Wavelet generation
 
 # 4. Visualization (Must be defined before Solver/Workflow)
 include("visualization/wavefield_video.jl")
@@ -156,5 +161,8 @@ include("io/model_io.jl")
 include("io/seismic_data_io.jl")
 include("io/geometry_io.jl")
 include("io/output_manager.jl")
+
+include("api/API.jl")
+include("deprecations.jl")
 
 end # module ElasticWave2D

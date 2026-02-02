@@ -37,7 +37,7 @@ dispatches to the appropriate kernel implementations.
 6. Record at receivers
 """
 function time_step!(backend::AbstractBackend, W::Wavefield, M::Medium, H::HABCConfig,
-    a, src::Source, rec::Receivers, k::Int, params::SimParams)
+    a, src::AbstractSource, rec::Receivers, k::Int, params::SimParams)
 
     # 1. Backup boundary (for HABC extrapolation)
     backup_boundary!(backend, W, H, M)
@@ -68,7 +68,7 @@ end
 Execute a single time step with enhanced boundary configuration handling.
 """
 function time_step_with_boundaries!(backend::AbstractBackend, W::Wavefield, M::Medium, H::HABCConfig,
-    a, src::Source, rec::Receivers, k::Int, params::SimParams,
+    a, src::AbstractSource, rec::Receivers, k::Int, params::SimParams,
     boundary_config::BoundaryConfig)
 
     # 1. Backup boundary (for HABC extrapolation)
@@ -161,7 +161,7 @@ run_time_loop!(backend, W, M, H, a, src, rec, params; on_step=my_callback)
 ```
 """
 function run_time_loop!(backend::AbstractBackend, W::Wavefield, M::Medium, H::HABCConfig,
-    a, src::Source, rec::Receivers, params::SimParams;
+    a, src::AbstractSource, rec::Receivers, params::SimParams;
     progress::Bool=true, on_step=nothing)
 
     nt = params.nt
@@ -214,7 +214,7 @@ Run the complete time stepping loop with enhanced boundary configuration.
              Return `false` to stop simulation early.
 """
 function run_time_loop_with_boundaries!(backend::AbstractBackend, W::Wavefield, M::Medium, H::HABCConfig,
-    a, src::Source, rec::Receivers, params::SimParams, boundary_config::BoundaryConfig;
+    a, src::AbstractSource, rec::Receivers, params::SimParams, boundary_config::BoundaryConfig;
     progress::Bool=true, on_step=nothing)
 
     nt = params.nt

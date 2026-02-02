@@ -119,7 +119,27 @@ function simulate!(model::VelocityModel,
     src_i = round(Int, src_x / model.dx) + medium.pad + 1
     src_j = round(Int, src_z / model.dz) + medium.pad + 1
     wavelet = ricker_wavelet(config.f0, dt, config.nt)
-    src = Source(src_i, src_j, to_device(wavelet, be))
+
+    # Select source type based on config.source_type
+    source_type = config.source_type
+    if source_type == :explosion
+        src = Source(src_i, src_j, to_device(wavelet, be))
+    elseif source_type in (:force_z, :force_x)
+        # Body force: v += dt * f(t) / ρ  →  need buoyancy = 1/ρ at source point
+        orig_ix = clamp(round(Int, src_x / model.dx) + 1, 1, size(model.rho, 2))
+        orig_jz = clamp(round(Int, src_z / model.dz) + 1, 1, size(model.rho, 1))
+        rho_at_src = model.rho[orig_jz, orig_ix]
+        buoyancy_at_src = 1.0f0 / max(rho_at_src, 1.0f0)
+        component = source_type == :force_z ? :vz : :vx
+        src = ForceSource(src_i, src_j, to_device(wavelet, be), component, buoyancy_at_src)
+    elseif source_type in (:stress_txx, :stress_tzz, :stress_txz)
+        comp = source_type == :stress_txx ? :txx :
+               source_type == :stress_tzz ? :tzz : :txz
+        src = StressSource(src_i, src_j, to_device(wavelet, be), comp)
+    else
+        error("Unknown source_type: $(source_type). " *
+              "Use :explosion, :force_z, :force_x, :stress_txx, :stress_tzz, or :stress_txz")
+    end
 
     n_rec = length(rec_x)
     rec_i = [round(Int, x / model.dx) + medium.pad + 1 for x in rec_x]
@@ -131,7 +151,7 @@ function simulate!(model::VelocityModel,
         :vz
     )
 
-    @info "Geometry" source = (src_x, src_z) n_receivers = n_rec
+    @info "Geometry" source = (src_x, src_z) source_type = source_type n_receivers = n_rec
 
     recorder = nothing
     if video_config !== nothing
@@ -453,6 +473,7 @@ function seismic_survey(model, sources, receivers;
             cfl=config.cfl,
             f0=config.f0,
             free_surface=false,  # Disabled! Using vacuum
+            source_type=config.source_type,
             output_dir=config.output_dir,
             save_gather=config.save_gather,
             show_progress=config.show_progress,
@@ -504,6 +525,7 @@ function seismic_survey(model, sources, receivers;
             cfl=config.cfl,
             f0=config.f0,
             free_surface=false,  # Absorbing
+            source_type=config.source_type,
             output_dir=config.output_dir,
             save_gather=config.save_gather,
             show_progress=config.show_progress,
@@ -526,6 +548,7 @@ function seismic_survey(model, sources, receivers;
             cfl=config.cfl,
             f0=config.f0,
             free_surface=true,
+            source_type=config.source_type,
             output_dir=config.output_dir,
             save_gather=config.save_gather,
             show_progress=config.show_progress,

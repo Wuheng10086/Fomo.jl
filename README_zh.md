@@ -68,7 +68,7 @@ result = seismic_survey(
     model,
     (src_x, src_z),
     (rec_x, rec_z);
-    surface_method = :vacuum,    # :vacuum, :free_surface, 或 :absorbing
+    surface_method = :vacuum,    # :vacuum, :image, 或 :absorbing
     vacuum_layers = 5,
     config = SimulationConfig(nt=1000, f0=20.0f0)
 )

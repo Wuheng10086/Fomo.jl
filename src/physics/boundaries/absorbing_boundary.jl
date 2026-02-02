@@ -217,7 +217,7 @@ end
 # ==============================================================================
 
 """
-    apply_image_method!(backend, W, M, M_order)
+    apply_image_method!(backend, W, M)
 
 Apply stress-free boundary condition at top (z=0) using Image Method.
 Sets stress to zero at surface and applies antisymmetric mirroring to ghost points.
@@ -229,9 +229,10 @@ function apply_image_method!(::CPUBackend, W::Wavefield, M::Medium)
 
     nx = M.nx
     j_fs = M.pad + 1
+    M_order = M.M  # FIXED: 从 Medium 获取，而不是硬编码
 
     # Vectorized loop
-    @inbounds for j in j_fs-5:j_fs
+    @inbounds for j in (j_fs-M_order):j_fs
         @simd for i in 1:nx
             W.tzz[i, j] = 0.0f0
             W.txz[i, j] = 0.0f0
@@ -407,9 +408,6 @@ function _habc_corners_kernel!(f, f_old, w, qx, qz, qt_x, qt_z, qxt, nbc, nx, nz
     return nothing
 end
 
-# 删除旧的合并kernel
-# function _habc_kernel_optimized! 已被上面两个kernel替代
-
 function apply_image_method!(::CUDABackend, W::Wavefield, M::Medium)
     if !M.is_free_surface
         return nothing
@@ -417,12 +415,12 @@ function apply_image_method!(::CUDABackend, W::Wavefield, M::Medium)
 
     nx = M.nx
     j_fs = M.pad + 1
-    M_order = 5 # Should be passed or retrieved from M/params
-    
+    M_order = M.M  # FIXED: 从 Medium 获取，而不是硬编码
+
     # Threads cover x dimension (256) and layers (1)
     # We use blockIdx.y to handle multiple layers (surface + ghosts)
     total_layers = M_order + 1
-    
+
     threads = (256, 1)
     blocks = (cld(nx, 256), total_layers)
 
@@ -433,7 +431,7 @@ end
 function _image_method_kernel!(tzz, txz, nx, j_fs, M_order)
     i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     j_offset = blockIdx().y - 1
-    j = j_fs - 5 + j_offset
+    j = j_fs - M_order + j_offset
 
     if i <= nx && j >= 1 && j <= j_fs
         @inbounds tzz[i, j] = 0.0f0

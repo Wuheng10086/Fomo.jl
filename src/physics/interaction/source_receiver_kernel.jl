@@ -19,10 +19,10 @@ function inject_source!(::CPUBackend, W::Wavefield, src::Source, k::Int, dt::Flo
     if k > length(src.wavelet)
         return nothing
     end
-    
+
     wav = src.wavelet[k]
     i, j = src.i, src.j
-    
+
     # Pressure source (explosion)
     W.txx[i, j] += wav
     W.tzz[i, j] += wav
@@ -73,8 +73,8 @@ function inject_source!(::CUDABackend, W::Wavefield, src::Source, k::Int, dt::Fl
     if k > length(src.wavelet)
         return nothing
     end
-    
-    @cuda threads=1 blocks=1 _inject_source_kernel!(
+
+    @cuda threads = 1 blocks = 1 _inject_source_kernel!(
         W.txx, W.tzz, src.wavelet, src.i, src.j, k
     )
     return nothing
@@ -86,13 +86,70 @@ function inject_source!(::CUDABackend, W::Wavefield, src::StressSource, k::Int, 
     end
 
     if src.component == :txx
-        @cuda threads=1 blocks=1 _inject_field_at_kernel!(W.txx, src.wavelet, src.i, src.j, k)
+        @cuda threads = 1 blocks = 1 _inject_field_at_kernel!(W.txx, src.wavelet, src.i, src.j, k)
     elseif src.component == :tzz
-        @cuda threads=1 blocks=1 _inject_field_at_kernel!(W.tzz, src.wavelet, src.i, src.j, k)
+        @cuda threads = 1 blocks = 1 _inject_field_at_kernel!(W.tzz, src.wavelet, src.i, src.j, k)
     elseif src.component == :txz
-        @cuda threads=1 blocks=1 _inject_field_at_kernel!(W.txz, src.wavelet, src.i, src.j, k)
+        @cuda threads = 1 blocks = 1 _inject_field_at_kernel!(W.txz, src.wavelet, src.i, src.j, k)
     else
         error("Unknown stress component: $(src.component). Use :txx, :tzz, or :txz")
+    end
+
+    return nothing
+end
+
+# ------------------------------------------------------------------------------
+# ForceSource (body force)
+#
+# Physics: ρ ∂v/∂t = ∇·σ + f
+# Discrete: v += dt * f(t) * buoyancy    (buoyancy = 1/ρ)
+# ------------------------------------------------------------------------------
+
+function inject_source!(::CPUBackend, W::Wavefield, src::ForceSource, k::Int, dt::Float32)
+    if k > length(src.wavelet)
+        return nothing
+    end
+
+    wav = src.wavelet[k]
+    i, j = src.i, src.j
+    scale = dt * src.buoyancy_at_src
+
+    if src.component == :vz
+        W.vz[i, j] += wav * scale
+    elseif src.component == :vx
+        W.vx[i, j] += wav * scale
+    else
+        error("Unknown velocity component: $(src.component). Use :vx or :vz")
+    end
+
+    return nothing
+end
+
+function _inject_force_kernel!(field, wavelet, i0, j0, k, scale)
+    if threadIdx().x == 1 && blockIdx().x == 1
+        wav = wavelet[k]
+        @inbounds field[i0, j0] += wav * scale
+    end
+    return nothing
+end
+
+function inject_source!(::CUDABackend, W::Wavefield, src::ForceSource, k::Int, dt::Float32)
+    if k > length(src.wavelet)
+        return nothing
+    end
+
+    scale = dt * src.buoyancy_at_src
+
+    if src.component == :vz
+        @cuda threads = 1 blocks = 1 _inject_force_kernel!(
+            W.vz, src.wavelet, src.i, src.j, k, scale
+        )
+    elseif src.component == :vx
+        @cuda threads = 1 blocks = 1 _inject_force_kernel!(
+            W.vx, src.wavelet, src.i, src.j, k, scale
+        )
+    else
+        error("Unknown velocity component: $(src.component). Use :vx or :vz")
     end
 
     return nothing
@@ -112,7 +169,7 @@ function _inject_field_kernel!(field, i0, j0, value)
 end
 
 function inject_source!(field::AbstractMatrix{Float32}, i::Int, j::Int, value::Float32, ::CUDABackend)
-    @cuda threads=1 blocks=1 _inject_field_kernel!(field, i, j, value)
+    @cuda threads = 1 blocks = 1 _inject_field_kernel!(field, i, j, value)
     return nothing
 end
 
@@ -150,21 +207,33 @@ function _record_kernel!(data, field, rec_i, rec_j, k, n_rec)
     return nothing
 end
 
+# FIXED: 专门的压力录制内核，避免创建临时数组
+function _record_pressure_kernel!(data, txx, tzz, rec_i, rec_j, k, n_rec)
+    idx = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    if idx <= n_rec
+        ii, jj = rec_i[idx], rec_j[idx]
+        @inbounds data[k, idx] = (txx[ii, jj] + tzz[ii, jj]) * 0.5f0
+    end
+    return nothing
+end
+
 function record_receivers!(::CUDABackend, W::Wavefield, rec::Receivers, k::Int)
     n_rec = length(rec.i)
-    
-    # Select field based on type
-    field = if rec.type == :vz
-        W.vz
+
+    if rec.type == :vz
+        @cuda threads = 256 blocks = cld(n_rec, 256) _record_kernel!(
+            rec.data, W.vz, rec.i, rec.j, k, n_rec
+        )
     elseif rec.type == :vx
-        W.vx
-    else  # :p - would need special handling, defaulting to vz
-        W.vz
+        @cuda threads = 256 blocks = cld(n_rec, 256) _record_kernel!(
+            rec.data, W.vx, rec.i, rec.j, k, n_rec
+        )
+    elseif rec.type == :p
+        # FIXED: 使用专门的压力录制内核
+        @cuda threads = 256 blocks = cld(n_rec, 256) _record_pressure_kernel!(
+            rec.data, W.txx, W.tzz, rec.i, rec.j, k, n_rec
+        )
     end
-    
-    @cuda threads=256 blocks=cld(n_rec, 256) _record_kernel!(
-        rec.data, field, rec.i, rec.j, k, n_rec
-    )
     return nothing
 end
 
@@ -192,21 +261,33 @@ function _record_direct_kernel!(gather, field, rec_i, rec_j, k, n_rec)
     return nothing
 end
 
+# FIXED: 专门的压力直接录制内核
+function _record_direct_pressure_kernel!(gather, txx, tzz, rec_i, rec_j, k, n_rec)
+    idx = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+    if idx <= n_rec
+        ii, jj = rec_i[idx], rec_j[idx]
+        @inbounds gather[k, idx] = (txx[ii, jj] + tzz[ii, jj]) * 0.5f0
+    end
+    return nothing
+end
+
 function record_receivers!(gather::AbstractMatrix{Float32}, W::Wavefield, rec::Receivers, k::Int, ::CUDABackend)
     n_rec = length(rec.i)
-    
-    # Select field based on type
-    field = if rec.type == :vz
-        W.vz
+
+    if rec.type == :vz
+        @cuda threads = 256 blocks = cld(n_rec, 256) _record_direct_kernel!(
+            gather, W.vz, rec.i, rec.j, k, n_rec
+        )
     elseif rec.type == :vx
-        W.vx
-    else  # :p
-        (W.txx + W.tzz) * 0.5f0  # This would need special handling
+        @cuda threads = 256 blocks = cld(n_rec, 256) _record_direct_kernel!(
+            gather, W.vx, rec.i, rec.j, k, n_rec
+        )
+    elseif rec.type == :p
+        # FIXED: 使用专门的压力录制内核
+        @cuda threads = 256 blocks = cld(n_rec, 256) _record_direct_pressure_kernel!(
+            gather, W.txx, W.tzz, rec.i, rec.j, k, n_rec
+        )
     end
-    
-    @cuda threads=256 blocks=cld(n_rec, 256) _record_direct_kernel!(
-        gather, field, rec.i, rec.j, k, n_rec
-    )
     return nothing
 end
 
@@ -221,7 +302,7 @@ Reset all wavefield components to zero.
 """
 function reset!(::CPUBackend, W::Wavefield)
     for field in (W.vx, W.vz, W.txx, W.tzz, W.txz,
-                  W.vx_old, W.vz_old, W.txx_old, W.tzz_old, W.txz_old)
+        W.vx_old, W.vz_old, W.txx_old, W.tzz_old, W.txz_old)
         fill!(field, 0.0f0)
     end
     return nothing
@@ -229,7 +310,7 @@ end
 
 function reset!(::CUDABackend, W::Wavefield)
     for field in (W.vx, W.vz, W.txx, W.tzz, W.txz,
-                  W.vx_old, W.vz_old, W.txx_old, W.tzz_old, W.txz_old)
+        W.vx_old, W.vz_old, W.txx_old, W.tzz_old, W.txz_old)
         fill!(field, 0.0f0)
     end
     return nothing

@@ -1,9 +1,8 @@
 # ==============================================================================
-# utils/init.jl (OPTIMIZED)
+# initialization/medium_setup.jl (MODIFIED)
 #
 # Initialization utilities for Medium, HABC, etc.
-# OPTIMIZATION: Precomputes buoyancy (1/rho) and lam_2mu to eliminate 
-#               divisions in the hot loop
+# ★ MODIFIED: Removed ricker_wavelet (moved to physics/interaction/wavelet.jl)
 # ==============================================================================
 
 # ==============================================================================
@@ -29,24 +28,8 @@ function get_fd_coefficients(order::Int)
 end
 
 # ==============================================================================
-# Ricker Wavelet
+# ★ ricker_wavelet has been MOVED to physics/interaction/wavelet.jl
 # ==============================================================================
-
-"""
-    ricker_wavelet(f0, dt, nt) -> Vector{Float32}
-
-Generate Ricker (Mexican hat) wavelet.
-"""
-function ricker_wavelet(f0::Real, dt::Real, nt::Int)
-    t0 = 1.0 / f0
-    wavelet = zeros(Float32, nt)
-    for i in 1:nt
-        τ = (i - 1) * dt - t0
-        arg = (π * f0 * τ)^2
-        wavelet[i] = Float32((1.0 - 2.0 * arg) * exp(-arg))
-    end
-    return wavelet
-end
 
 # ==============================================================================
 # Medium Initialization - OPTIMIZED
@@ -56,16 +39,6 @@ end
     init_medium(vp, vs, rho, dx, dz, nbc, fd_order, backend; free_surface=true)
 
 Initialize Medium with material properties.
-OPTIMIZED: Precomputes buoyancy (1/rho) and lam_2mu (lambda + 2*mu)
-          to eliminate expensive divisions in the simulation loop.
-
-# Arguments
-- `vp`, `vs`, `rho`: Velocity and density arrays [nz, nx] (seismic convention)
-- `dx`, `dz`: Grid spacing
-- `nbc`: Boundary layer thickness
-- `fd_order`: Finite difference order
-- `backend`: Target backend (CPU_BACKEND or CUDA_BACKEND)
-- `free_surface`: Enable free surface at top
 """
 function init_medium(vp::Matrix, vs::Matrix, rho::Matrix,
     dx::Real, dz::Real, nbc::Int, fd_order::Int,
@@ -74,8 +47,6 @@ function init_medium(vp::Matrix, vs::Matrix, rho::Matrix,
     M = fd_order ÷ 2
     pad = nbc + M
 
-    # Input data is [nz, nx] (seismic convention)
-    # Transpose to [nx, nz] for simulation (better cache performance)
     vp_t = permutedims(vp)
     vs_t = permutedims(vs)
     rho_t = permutedims(rho)
@@ -87,15 +58,12 @@ function init_medium(vp::Matrix, vs::Matrix, rho::Matrix,
     x_max = Float32((nx_inner - 1) * dx)
     z_max = Float32((nz_inner - 1) * dz)
 
-    # Pad and compute staggered parameters
     vp_pad = _pad_array(vp_t, pad)
     vs_pad = _pad_array(vs_t, pad)
     rho_pad = _pad_array(rho_t, pad)
 
-    # Compute all material properties including precomputed values
     lam, mu_txx, mu_txz, buoy_vx, buoy_vz, lam_2mu = _compute_staggered_params_optimized(vp_pad, vs_pad, rho_pad)
 
-    # Move to device
     return Medium(
         nx, nz, Float32(dx), Float32(dz), x_max, z_max,
         M, pad, free_surface,
@@ -108,11 +76,6 @@ function init_medium(vp::Matrix, vs::Matrix, rho::Matrix,
     )
 end
 
-"""
-    init_medium_vacuum(vp, vs, rho, dx, dz, nbc, fd_order, backend; surface_elevation=nothing)
-
-Initialize Medium with vacuum boundary condition for irregular surfaces.
-"""
 function init_medium_vacuum(vp::Matrix, vs::Matrix, rho::Matrix,
     dx::Real, dz::Real, nbc::Int, fd_order::Int,
     backend::AbstractBackend; surface_elevation=nothing)
@@ -120,8 +83,6 @@ function init_medium_vacuum(vp::Matrix, vs::Matrix, rho::Matrix,
     M = fd_order ÷ 2
     pad = nbc + M
 
-    # Input data is [nz, nx] (seismic convention)
-    # Transpose to [nx, nz] for simulation (better cache performance)
     vp_t = permutedims(vp)
     vs_t = permutedims(vs)
     rho_t = permutedims(rho)
@@ -133,24 +94,19 @@ function init_medium_vacuum(vp::Matrix, vs::Matrix, rho::Matrix,
     x_max = Float32((nx_inner - 1) * dx)
     z_max = Float32((nz_inner - 1) * dz)
 
-    # Pad and compute staggered parameters
     vp_pad = _pad_array(vp_t, pad)
     vs_pad = _pad_array(vs_t, pad)
     rho_pad = _pad_array(rho_t, pad)
 
-    # Apply vacuum formulation if surface elevation is provided
     if surface_elevation !== nothing
-        # Apply vacuum mask to set material parameters to 0 above surface
         surface_j = setup_vacuum_formulation!(vp_pad, vs_pad, rho_pad, surface_elevation, dz, pad)
     end
 
-    # Compute all material properties including precomputed values using vacuum formulation
     lam, mu_txx, mu_txz, buoy_vx, buoy_vz, lam_2mu = compute_staggered_params_vacuum(vp_pad, vs_pad, rho_pad)
 
-    # Move to device
     return Medium(
         nx, nz, Float32(dx), Float32(dz), x_max, z_max,
-        M, pad, true,  # is_free_surface is true for vacuum case
+        M, pad, true,
         to_device(lam, backend),
         to_device(mu_txx, backend),
         to_device(mu_txz, backend),
@@ -160,17 +116,6 @@ function init_medium_vacuum(vp::Matrix, vs::Matrix, rho::Matrix,
     )
 end
 
-"""
-    init_medium(model::VelocityModel, nbc, fd_order, backend; free_surface=true)
-
-Initialize Medium from a VelocityModel struct (loaded via load_model).
-
-# Example
-```julia
-model = load_model("marmousi.jld2")
-medium = init_medium(model, 50, 8, backend(:cpu))
-```
-"""
 function init_medium(model::VelocityModel, nbc::Int, fd_order::Int,
     backend::AbstractBackend; free_surface::Bool=true)
     return init_medium(model.vp, model.vs, model.rho,
@@ -183,7 +128,6 @@ function _pad_array(data::Matrix, pad::Int)
     result = zeros(Float32, nx + 2 * pad, nz + 2 * pad)
     result[pad+1:pad+nx, pad+1:pad+nz] .= Float32.(data)
 
-    # Extend boundaries
     for i in 1:pad
         result[i, :] .= result[pad+1, :]
         result[end-i+1, :] .= result[end-pad, :]
@@ -195,34 +139,17 @@ function _pad_array(data::Matrix, pad::Int)
     return result
 end
 
-"""
-    _compute_staggered_params_optimized(vp, vs, rho)
-
-Compute staggered grid parameters with precomputed buoyancy and lam_2mu.
-OPTIMIZATION: Division by rho is done once here, not in every time step!
-"""
 function _compute_staggered_params_optimized(vp, vs, rho)
     nx, nz = size(vp)
 
-    # Basic Lamé parameters
     mu = Float32.(rho .* vs .^ 2)
     lam = Float32.(rho .* vp .^ 2 .- 2.0f0 .* mu)
-
-    # OPTIMIZED: Precompute lambda + 2*mu
     lam_2mu = Float32.(lam .+ 2.0f0 .* mu)
 
-    # OPTIMIZED: Precompute buoyancy (1/rho) instead of storing rho
-    # This eliminates division in the velocity update kernel!
-    # SAFETY: Explicitly handle vacuum (rho=0) to avoid Inf/NaN
-
-    # 1. Effective buoyancy for vx: b_x at (i+1/2, j)
-    # Use horizontal 2-point arithmetic average of rho at (i,j) and (i+1,j)
     buoy_vx = zeros(Float32, nx, nz)
     @inbounds for j in 1:nz
         for i in 1:nx-1
-            rho1 = rho[i, j]
-            rho2 = rho[i+1, j]
-
+            rho1, rho2 = rho[i, j], rho[i+1, j]
             if rho1 == 0.0f0 && rho2 == 0.0f0
                 buoy_vx[i, j] = 0.0f0
             elseif rho1 == 0.0f0
@@ -236,15 +163,10 @@ function _compute_staggered_params_optimized(vp, vs, rho)
     end
     buoy_vx[nx, :] .= buoy_vx[nx-1, :]
 
-    # 2. Effective buoyancy for vz: b_z at (i, j+1/2)
-    # Use vertical 2-point arithmetic average of rho at (i,j) and (i,j+1)
-    # SAFETY: Handle vacuum cases correctly
     buoy_vz = zeros(Float32, nx, nz)
     @inbounds for j in 1:nz-1
         for i in 1:nx
-            rho1 = rho[i, j]
-            rho2 = rho[i, j+1]
-
+            rho1, rho2 = rho[i, j], rho[i, j+1]
             if rho1 == 0.0f0 && rho2 == 0.0f0
                 buoy_vz[i, j] = 0.0f0
             elseif rho1 == 0.0f0
@@ -258,24 +180,13 @@ function _compute_staggered_params_optimized(vp, vs, rho)
     end
     buoy_vz[:, nz] .= buoy_vz[:, nz-1]
 
-    # 3. Harmonic average for mu at txz positions (i+1/2, j+1/2)
-    # Use 4-point harmonic average of mu
-    # SAFETY: If any mu in the stencil is 0, the effective mu must be 0
-    # to enforce stress-free condition at vacuum interface
     mu_txz = zeros(Float32, nx, nz)
     @inbounds for j in 1:nz-1
         for i in 1:nx-1
-            m1 = mu[i, j]
-            m2 = mu[i+1, j]
-            m3 = mu[i, j+1]
-            m4 = mu[i+1, j+1]
-
-            # The key vacuum condition: if ANY neighbor is vacuum (mu=0), 
-            # shear stress txz must be 0 at the interface.
+            m1, m2, m3, m4 = mu[i, j], mu[i+1, j], mu[i, j+1], mu[i+1, j+1]
             if m1 == 0.0f0 || m2 == 0.0f0 || m3 == 0.0f0 || m4 == 0.0f0
                 mu_txz[i, j] = 0.0f0
             else
-                # 4-point harmonic average
                 mu_txz[i, j] = 4.0f0 / (1.0f0 / m1 + 1.0f0 / m2 + 1.0f0 / m3 + 1.0f0 / m4)
             end
         end
@@ -287,18 +198,9 @@ function _compute_staggered_params_optimized(vp, vs, rho)
 end
 
 # ==============================================================================
-# HABC Initialization (unchanged)
+# HABC Initialization
 # ==============================================================================
 
-"""
-    init_habc(nx, nz, nbc, pad, dt, dx, dz, v_ref, backend)
-
-Initializes the Higdon Absorbing Boundary Condition (HABC) configuration.
-Computes extrapolation coefficients and spatial blending weight matrices.
-
-NOTE: 权重覆盖整个 pad 层（nbc + M），确保 FD stencil padding 区域也有吸收效果。
-      HABCConfig.nbc 存储的是 pad 值，apply_habc! 的范围是 j = 2 : pad。
-"""
 function init_habc(nx::Int, nz::Int, nbc::Int, pad::Int, dt::Real, dx::Real, dz::Real,
     v_ref::Real, backend::AbstractBackend)
 
@@ -307,23 +209,18 @@ function init_habc(nx::Int, nz::Int, nbc::Int, pad::Int, dt::Real, dx::Real, dz:
     b_p = 0.45f0
     beta = 1.0f0
 
-    # Precompute extrapolation coefficients
     qx = Float32((b_p * (beta + rx) - rx) / ((beta + rx) * (1 - b_p)))
     qz = Float32((b_p * (beta + rz) - rz) / ((beta + rz) * (1 - b_p)))
     qt_x = Float32((b_p * (beta + rx) - beta) / ((beta + rx) * (1 - b_p)))
     qt_z = Float32((b_p * (beta + rz) - beta) / ((beta + rz) * (1 - b_p)))
     qxt = Float32(b_p / (b_p - 1.0f0))
 
-    # Distance function for blending - 使用 pad 而不是 nbc！
     dist(i, j) = min(i - 1, nx - i, j - 1, nz - j)
 
-    # Generate weighting matrices - 权重在整个 pad 层内过渡
-    # 注意：pad-1 是为了让 j=pad 时权重刚好为 1.0
     w_vx = [Float32(clamp((dist(i, j) - 0.0) / (pad - 1), 0.0, 1.0)) for j in 1:nz, i in 1:nx]
     w_vz = [Float32(clamp((dist(i, j) - 0.5) / (pad - 1), 0.0, 1.0)) for j in 1:nz, i in 1:nx]
     w_tau = [Float32(clamp((dist(i, j) - 0.75) / (pad - 1), 0.0, 1.0)) for j in 1:nz, i in 1:nx]
 
-    # HABCConfig.nbc 存储 pad-1，这样 apply_habc! 中 j = 2 : nbc+1 = 2 : pad
     return HABCConfig(
         pad - 1,
         qx, qz, qt_x, qt_z, qxt,
@@ -333,22 +230,16 @@ function init_habc(nx::Int, nz::Int, nbc::Int, pad::Int, dt::Real, dx::Real, dz:
     )
 end
 
-# 保持向后兼容的旧接口（假设 8 阶 FD，M=4）
 function init_habc(nx::Int, nz::Int, nbc::Int, dt::Real, dx::Real, dz::Real,
     v_ref::Real, backend::AbstractBackend)
-    pad = nbc + 4  # 默认 M=4
+    pad = nbc + 4
     return init_habc(nx, nz, nbc, pad, dt, dx, dz, v_ref, backend)
 end
 
 # ==============================================================================
-# Receiver Setup (unchanged)
+# Receiver Setup
 # ==============================================================================
 
-"""
-    setup_receivers(x_positions, z_positions, medium; type=:vz)
-
-Create receiver configuration (CPU indices, data allocated later).
-"""
 function setup_receivers(x::Vector{<:Real}, z::Vector{<:Real}, M::Medium; type::Symbol=:vz)
     n = length(x)
     i_rec = Vector{Int}(undef, n)
@@ -359,7 +250,6 @@ function setup_receivers(x::Vector{<:Real}, z::Vector{<:Real}, M::Medium; type::
         j_rec[r] = round(Int, z[r] / M.dz) + M.pad + 1
     end
 
-    # Dummy data - will be replaced per shot
     data = zeros(Float32, 1, n)
     return Receivers(i_rec, j_rec, data, type)
 end

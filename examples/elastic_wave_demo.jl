@@ -35,7 +35,7 @@ function elastic_wave_demo()
     println("2. Setting up source and receivers...")
     # Source near the top center
     src_x = 800.0f0
-    src_z = 20.0f0   # Shallow source
+    src_z = 50.0f0   # Shallow source
 
     # Receivers on the surface
     rec_x = Float32.(collect(50:10:1550))
@@ -55,21 +55,22 @@ function elastic_wave_demo()
     # Higher frequency source (40Hz)
 
     config = SimulationConfig(
-        nt = fast ? 1500 : 12000,
-        f0 = fast ? 25.0f0 : 40.0f0,
-        cfl = 0.3f0,
-        free_surface = true,
-        output_dir = "outputs/elastic_wave_demo",
-        save_gather = true,
-        plot_gather = true,
-        show_progress = true
+        nt=fast ? 1500 : 12000,
+        f0=fast ? 25.0f0 : 40.0f0,
+        cfl=0.3f0,
+        free_surface=true,
+        source_type=:force_z,
+        output_dir="outputs/elastic_wave_demo",
+        save_gather=true,
+        plot_gather=true,
+        show_progress=true
     )
 
     video_config = fast ? nothing : VideoConfig(
-        fields = [:vz],
-        skip = 50,
-        fps = 20,
-        colormap = :seismic
+        fields=[:vz],
+        skip=50,
+        fps=20,
+        colormap=:seismic
     )
 
     result = simulate!(model, src_x, src_z, rec_x, rec_z;

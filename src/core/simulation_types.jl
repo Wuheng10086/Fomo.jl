@@ -137,6 +137,33 @@ struct StressSource{V<:AbstractVector{Float32}, I<:Integer} <: AbstractSource
 end
 
 """
+    ForceSource{V, I}
+
+Body force source that injects into velocity fields (vx or vz).
+
+Physics: ρ ∂v/∂t = ∇·σ + f  →  v += dt * f(t) / ρ = dt * f(t) * buoyancy
+
+# Fields
+- `i::I`: X grid index (including padding)
+- `j::I`: Z grid index (including padding)
+- `wavelet::V`: Source time function
+- `component::Symbol`: `:vx` or `:vz`
+- `buoyancy_at_src::Float32`: 1/ρ at source location
+
+# Example
+```julia
+src = ForceSource(src_i, src_j, wavelet, :vz, 1.0f0 / rho_at_src)
+```
+"""
+struct ForceSource{V<:AbstractVector{Float32}, I<:Integer} <: AbstractSource
+    i::I
+    j::I
+    wavelet::V
+    component::Symbol         # :vx or :vz
+    buoyancy_at_src::Float32  # 1/ρ at source point
+end
+
+"""
     Receivers{T,I}
 
 Receiver configuration and data buffer.
