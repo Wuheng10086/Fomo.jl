@@ -4,7 +4,7 @@
 
 <p align="center">
   <b>GPU-accelerated 2D elastic wave simulation in Julia</b><br>
-  <i>Run seismic forward modeling on your laptop — no cluster, no complex setup</i>
+  <i>Run seismic forward modeling on your laptop </i>
 </p>
 
 <p align="center">
@@ -13,7 +13,7 @@
 
 ## Why This Project?
 
-Traditional seismic simulation codes are hard to install, poorly documented, and require HPC clusters. **ElasticWave2D.jl** is different:
+**ElasticWave2D.jl** provides a simple, Julia-native solution for 2D elastic wave simulation:
 
 - ✅ **One-line install** — Pure Julia, no Fortran/C compilation
 - ✅ **Runs on gaming GPUs** — GTX 1060, RTX 3060, etc.
@@ -31,8 +31,8 @@ Traditional seismic simulation codes are hard to install, poorly documented, and
 | **HABC Boundaries** | Higdon Absorbing BC (Ren & Liu 2014) |
 | **Image Method** | Accurate free surface BC (Robertsson 1996) |
 | **Vacuum Formulation** | Irregular topography, tunnels, cavities (Zeng et al. 2012) |
-| **Video Recording** | Wavefield snapshots → MP4 |
-| **Multiple Formats** | SEG-Y, Binary, HDF5, NPY, MAT, JLD2 |
+| **Video Recording** | Wavefield snapshots → MP4/GIF |
+| **Multiple Formats** | JLD2, Binary, SEG-Y (planned) |
 
 ## Installation
 
@@ -46,33 +46,30 @@ Pkg.add(url="https://github.com/Wuheng10086/ElasticWave2D.jl")
 ## Quick Start
 
 ```julia
-using ElasticWave2D
+using ElasticWave2D.API
 
 # Create a simple two-layer model
 nx, nz = 200, 100
-dx, dz = 10.0f0, 10.0f0
+dx = 10.0f0
 
 vp = fill(2000.0f0, nz, nx)
 vs = fill(1200.0f0, nz, nx)
 rho = fill(2000.0f0, nz, nx)
 vp[50:end, :] .= 3500.0f0  # Faster layer below
 
-model = VelocityModel(vp, vs, rho, dx, dz)
+model = VelocityModel(vp, vs, rho, dx, dx)
 
-# Survey geometry
-src_x, src_z = 1000.0f0, 20.0f0
-rec_x = Float32.(collect(100:10:1900))
-rec_z = fill(10.0f0, length(rec_x))
-
-# Run simulation with vacuum free surface
-result = seismic_survey(
+# Run simulation
+result = simulate(
     model,
-    (src_x, src_z),
-    (rec_x, rec_z);
-    surface_method = :image,    # :vacuum, :image, or :absorbing
-    vacuum_layers = 5,
-    config = SimulationConfig(nt=1000, f0=20.0f0)
+    SourceConfig(1000.0, 20.0; f0=20.0),           # Source at (1000m, 20m depth)
+    line_receivers(100.0, 1900.0, 181; z=10.0);    # 181 receivers
+    config = SimConfig(nt=1000, boundary=Vacuum(10))
 )
+
+# Access results
+println("Gather size: ", size(result.gather))
+plot_gather(result)
 ```
 
 ## Examples
@@ -80,8 +77,18 @@ result = seismic_survey(
 ### 🎬 Elastic Wave Demo
 High-resolution wave propagation in a two-layer medium with video output.
 
-```bash
-julia -t auto examples/elastic_wave_demo.jl
+```julia
+using ElasticWave2D.API
+
+model = VelocityModel(vp, vs, rho, 10.0f0, 10.0f0)
+
+result = simulate(
+    model,
+    SourceConfig(2000.0, 50.0, Ricker(15.0)),
+    line_receivers(100, 3900, 191);
+    config = SimConfig(nt=3000, boundary=FreeSurface()),
+    video = Video(fields=[:vz], interval=20, fps=30)
+)
 ```
 
 <p align="center">
@@ -94,8 +101,16 @@ julia -t auto examples/elastic_wave_demo.jl
 ### 🏗️ Tunnel Detection (Engineering)
 Detect underground cavities using seismic diffraction. Uses vacuum formulation for both free surface and tunnel cavity.
 
-```bash
-julia -t auto examples/tunnel_detection_demo.jl
+```julia
+# Create model with tunnel (set ρ=0 for void)
+rho[40:45, 95:105] .= 0.0f0  # Tunnel cavity
+
+result = simulate(
+    model,
+    SourceConfig(500.0, 10.0; f0=50.0),
+    line_receivers(100, 900, 81);
+    config = SimConfig(nt=2000, boundary=Vacuum(10))
+)
 ```
 
 <p align="center">
@@ -110,10 +125,6 @@ julia -t auto examples/tunnel_detection_demo.jl
 ### 🛢️ Exploration Seismic (Petroleum)
 Image an anticlinal structure — a classic hydrocarbon trap.
 
-```bash
-julia -t auto examples/exploration_seismic_demo.jl
-```
-
 <p align="center">
   <img src="docs/images/exploration_setup.png" width="400" alt="Exploration Setup">
   <img src="docs/images/exploration_gather.png" width="400" alt="Exploration Gather">
@@ -123,71 +134,102 @@ julia -t auto examples/exploration_seismic_demo.jl
 
 ---
 
-### 🔬 Boundary Comparison Demo
-Compare different surface handling methods side-by-side.
-
-```bash
-julia -t auto examples/seismic_survey_demo.jl
-```
+### 🔬 Boundary Comparison
 
 | Method | Surface Waves | Use Case |
 |--------|--------------|----------|
-| `:absorbing` | ❌ | Body waves only |
-| `:image` | ✅ | Accurate flat surface BC (Image Method) |
-| `:vacuum` | ✅ | Unified approach (recommended) |
+| `Absorbing()` | ❌ | Body waves only |
+| `FreeSurface()` | ✅ | Accurate flat surface (Image Method) |
+| `Vacuum(n)` | ✅ | Topography, cavities (recommended) |
 
-**Surface wave comparison** — Both methods produce Rayleigh waves, with nearly identical results:
+```julia
+# Compare different boundaries
+for boundary in [Absorbing(), FreeSurface(), Vacuum(10)]
+    result = simulate(model, source, receivers;
+        config = SimConfig(nt=2000, boundary=boundary))
+end
+```
 
 <p align="center">
-  <img src="docs/images/freesurface_gather.png" width="400" alt="Explicit Free Surface">
-  <img src="docs/images/vacuum_gather.png" width="400" alt="Vacuum Formulation">
+  <img src="docs/images/freesurface_gather.png" width="400" alt="Free Surface">
+  <img src="docs/images/vacuum_gather.png" width="400" alt="Vacuum">
 </p>
 <p align="center">
-  <i>Left: Image Method BC | Right: Vacuum formulation</i>
+  <i>Left: Image Method | Right: Vacuum formulation — nearly identical results</i>
 </p>
-
-The vacuum method offers more flexibility (topography, internal voids) with comparable accuracy.
 
 ## API Reference
 
-### `seismic_survey` — High-level Interface
+### Core Types
 
 ```julia
-seismic_survey(model, source, receivers;
-    surface_method = :vacuum,     # :vacuum, :image, :absorbing
-    vacuum_layers = 10,           # Number of vacuum layers (for :vacuum)
-    config = SimulationConfig(),
-    video_config = nothing
+# Wavelet
+Ricker(f0)                    # Ricker wavelet with frequency f0
+Ricker(f0, delay)             # With custom delay
+CustomWavelet(data)           # User-provided wavelet
+
+# Source
+SourceConfig(x, z; f0=15.0)                    # Quick setup
+SourceConfig(x, z, Ricker(15.0), ForceZ)       # Full control
+# Mechanisms: Explosion, ForceX, ForceZ, StressTxx, StressTzz, StressTxz
+
+# Receivers
+line_receivers(x0, x1, n; z=0.0)              # Line of receivers
+ReceiverConfig(x_vec, z_vec)                   # Custom positions
+ReceiverConfig(x_vec, z_vec, Vx)              # Record Vx instead of Vz
+
+# Boundary
+FreeSurface()      # Image Method (flat surface)
+Absorbing()        # HABC on all sides
+Vacuum(n)          # n vacuum layers at top (recommended)
+
+# Configuration
+SimConfig(
+    nt = 3000,           # Time steps
+    dt = nothing,        # Auto-compute from CFL
+    cfl = 0.4,           # CFL number
+    fd_order = 8,        # FD accuracy (2,4,6,8,10)
+    boundary = Vacuum(10),
+    output_dir = "outputs"
+)
+
+# Video
+Video(
+    fields = [:vz],      # Fields to record
+    interval = 50,       # Save every N steps
+    fps = 20,
+    format = :mp4        # :mp4 or :gif
 )
 ```
 
-### `simulate!` — Low-level Interface
+### Main Functions
 
 ```julia
-result = simulate!(model, src_x, src_z, rec_x, rec_z;
-    config = SimulationConfig(
-        nt = 3000,           # Time steps
-        f0 = 15.0f0,         # Source frequency (Hz)
-        fd_order = 8,        # FD accuracy order
-        free_surface = true, # Use Image Method BC
-        output_dir = "outputs"
-    ),
-    video_config = VideoConfig(
-        fields = [:vz],      # Record vertical velocity
-        skip = 20,           # Frame interval
-        fps = 30
-    )
-)
+# Run simulation
+result = simulate(model, source, receivers; config, video=nothing)
+
+# Batch simulation (high performance)
+using ElasticWave2D
+sim = BatchSimulator(model, rec_x, rec_z; nt=3000, f0=15.0)
+gathers = simulate_shots!(sim, src_x_vec, src_z_vec)
+
+# I/O
+save_result(result, "shot_001.jld2")
+result = load_result("shot_001.jld2")
+
+# Plotting (requires `using Plots`)
+plot_gather(result)
+plot_trace(result, 50)
 ```
 
-### Surface Method Comparison
+### Result Structure
 
-| Parameter | `surface_method=:image` | `surface_method=:vacuum` |
-|-----------|-------------------------|--------------------------|
-| Implementation | Image Method BC | ρ=0 layers at top |
-| Topography | ❌ Flat only | ✅ Any shape |
-| Internal voids | ❌ | ✅ Tunnels, caves |
-| Consistency | Accurate surface waves | Same physics everywhere |
+```julia
+result.gather      # [nt × n_receivers] seismogram
+result.dt          # Time step used
+result.nt          # Number of time steps
+result.snapshots   # Dict of wavefield snapshots (if video enabled)
+```
 
 ## Performance
 
@@ -201,13 +243,40 @@ result = simulate!(model, src_x, src_z, rec_x, rec_z;
 
 **CPU** (8-core, with `-t auto`): ~10-20x slower than GPU, but still practical for small-medium models.
 
+### Batch Performance
+
+```julia
+# Benchmark multi-shot performance
+using ElasticWave2D
+result = benchmark_shots(model, rec_x, rec_z, src_x, src_z; nt=3000, f0=15.0)
+# Typical: 0.1-0.3 sec/shot on GPU for medium grids
+```
+
 ## Why I Built This
 
-As a geophysics student, I struggled with existing seismic simulation tools like SOFI2D and SPECFEM — they require Linux, complex `make` configurations, and endless dependency issues. I just wanted to run a simple forward model on my laptop without spending days on setup.
+As a geophysics student, I wanted a simple tool to run seismic forward modeling on my laptop without complex setup. Existing tools like SOFI2D and SPECFEM are powerful and well-established, but I needed something lightweight for quick experiments and learning.
 
-I also found that PML (Perfectly Matched Layer) boundaries are computationally expensive. HABC (Higdon Absorbing Boundary Conditions) offers similar absorption quality with much better efficiency, which matters when you're running on a gaming GPU instead of a cluster.
+I also found that HABC (Higdon Absorbing Boundary Conditions) offers good absorption quality with better computational efficiency than PML, which is helpful when running on consumer hardware.
 
-So I built ElasticWave2D.jl — a tool I wish I had when I started. If you're a student with a laptop and curiosity, this is for you.
+So I built ElasticWave2D.jl — a simple, Julia-native tool for 2D elastic wave simulation. If you need a quick way to experiment with seismic modeling, this might be useful for you.
+
+## Project Structure
+
+```
+ElasticWave2D.jl/
+├── src/
+│   ├── api/                # High-level API (recommended entry point)
+│   ├── compute/            # Hardware abstraction (CPU/GPU)
+│   ├── core/               # Fundamental types (Wavefield, Medium)
+│   ├── physics/            # Numerical kernels (velocity, stress, boundaries)
+│   ├── initialization/     # Setup routines (media, topography)
+│   ├── solver/             # Time-stepping and batch execution
+│   ├── io/                 # Input/Output
+│   └── visualization/      # Plotting and video
+├── examples/               # Usage examples
+├── test/                   # Unit tests
+└── docs/                   # Documentation
+```
 
 ## References
 
@@ -230,30 +299,9 @@ If you use ElasticWave2D.jl in your research, please cite:
 }
 ```
 
-## Project Structure
-
-The project follows a domain-driven structure to ensure clarity and maintainability:
-
-```
-ElasticWave2D.jl/
-├── src/
-│   ├── compute/            # Hardware abstraction (CPU/GPU)
-│   ├── core/               # Fundamental types (Wavefield, Medium, Configs)
-│   ├── physics/            # Numerical kernels (Velocity, Stress, Boundaries)
-│   ├── initialization/     # Setup routines (Media, Topography)
-│   ├── solver/             # Time-stepping and orchestration logic
-│   ├── workflow/           # High-level User APIs
-│   ├── io/                 # Input/Output (Models, Seismic Data)
-│   └── visualization/      # Plotting and Video generation
-├── examples/               # Usage examples
-├── tests/                  # Unit and integration tests
-├── docs/                   # Documentation
-└── scripts/                # Utility scripts
-```
-
 ## Contributing
 
-We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+Contributions welcome! Please open an issue or PR.
 
 ## License
 

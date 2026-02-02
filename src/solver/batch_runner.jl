@@ -1,5 +1,5 @@
 # ==============================================================================
-# simulation/batch.jl
+# solver/batch_runner.jl
 #
 # High-performance batch simulation API
 # Optimized for running many shots with minimal overhead
@@ -18,7 +18,7 @@ All heavy initialization is done once, then shots can be run rapidly.
 # Example
 ```julia
 # Initialize once (includes JIT compilation)
-simulator = BatchSimulator(model, rec_x, rec_z; config=config)
+simulator = BatchSimulator(model, rec_x, rec_z; nt=3000, f0=15.0f0)
 
 # Run many shots rapidly
 for (sx, sz) in shot_positions
@@ -56,7 +56,7 @@ mutable struct BatchSimulator
 end
 
 """
-    BatchSimulator(model, rec_x, rec_z; config, be=backend(:cuda))
+    BatchSimulator(model, rec_x, rec_z; nt, f0, nbc=50, fd_order=8, cfl=0.4, free_surface=true, be=nothing)
 
 Create a pre-initialized batch simulator for high-performance multi-shot simulation.
 
@@ -66,16 +66,20 @@ Create a pre-initialized batch simulator for high-performance multi-shot simulat
 - `rec_z::Vector{<:Real}`: Receiver z positions in meters
 
 # Keyword Arguments
-- `config::SimulationConfig`: Simulation configuration
-- `be::AbstractBackend`: Backend (default: CUDA if available)
+- `nt::Int`: Number of time steps (required)
+- `f0::Float32`: Source dominant frequency in Hz (required)
+- `nbc::Int=50`: Number of absorbing boundary layers
+- `fd_order::Int=8`: Finite difference order
+- `cfl::Float32=0.4f0`: CFL number for dt calculation
+- `free_surface::Bool=true`: Enable free surface
+- `be::Union{AbstractBackend,Nothing}=nothing`: Backend (auto-select if nothing)
 
 # Returns
 - `BatchSimulator`: Ready-to-use simulator
 
 # Example
 ```julia
-config = SimulationConfig(nt=4000, f0=15.0f0, nbc=50)
-sim = BatchSimulator(model, rec_x, rec_z; config=config)
+sim = BatchSimulator(model, rec_x, rec_z; nt=4000, f0=15.0f0)
 
 # Now run shots efficiently
 gather1 = simulate_shot!(sim, 5000.0f0, 10.0f0)
@@ -86,30 +90,33 @@ function BatchSimulator(
     model::VelocityModel,
     rec_x::Vector{<:Real},
     rec_z::Vector{<:Real};
-    config::SimulationConfig=SimulationConfig(),
-    be::AbstractBackend=is_cuda_available() ? backend(:cuda) : backend(:cpu)
+    nt::Int,
+    f0::Real,
+    nbc::Int=50,
+    fd_order::Int=8,
+    cfl::Real=0.4f0,
+    free_surface::Bool=true,
+    be::Union{AbstractBackend,Nothing}=nothing
 )
-    # Compute dt if not specified
+    # Auto-select backend
+    be = be === nothing ? (is_cuda_available() ? backend(:cuda) : backend(:cpu)) : be
+    
+    # Compute dt
     vp_max = maximum(model.vp)
-    dt = if config.dt === nothing
-        Float32(config.cfl * min(model.dx, model.dz) / vp_max)
-    else
-        config.dt
-    end
+    dt = Float32(cfl * min(model.dx, model.dz) / vp_max)
 
-    # Create SimParams with correct signature: (dt, nt, dx, dz, fd_order)
-    params = SimParams(dt, config.nt, model.dx, model.dz, config.fd_order)
+    # Create SimParams
+    params = SimParams(dt, nt, model.dx, model.dz, fd_order)
 
     # Initialize medium (ONCE)
-    medium = init_medium(model, config.nbc, config.fd_order, be;
-        free_surface=config.free_surface)
+    medium = init_medium(model, nbc, fd_order, be; free_surface=free_surface)
 
     # Initialize HABC (ONCE)
-    habc = init_habc(medium.nx, medium.nz, config.nbc, medium.pad, dt,
+    habc = init_habc(medium.nx, medium.nz, nbc, medium.pad, dt,
         model.dx, model.dz, vp_max, be)
 
     # FD coefficients (ONCE)
-    fd_coeffs = to_device(get_fd_coefficients(config.fd_order), be)
+    fd_coeffs = to_device(get_fd_coefficients(fd_order), be)
 
     # Wavefield (ONCE)
     wavefield = Wavefield(medium.nx, medium.nz, be)
@@ -121,17 +128,17 @@ function BatchSimulator(
     receivers = Receivers(
         to_device(rec_i, be),
         to_device(rec_j, be),
-        to_device(zeros(Float32, config.nt, n_rec), be),
+        to_device(zeros(Float32, nt, n_rec), be),
         :vz
     )
 
     # Pre-generate and cache wavelet on device
-    wavelet = ricker_wavelet(config.f0, dt, config.nt)
+    wavelet = ricker_wavelet(Float32(f0), dt, nt)
     wavelet_device = to_device(wavelet, be)
 
     return BatchSimulator(
         be, medium, habc, fd_coeffs, wavefield, receivers,
-        wavelet_device, params, config.f0, model.dx, model.dz, medium.pad, true
+        wavelet_device, params, Float32(f0), model.dx, model.dz, medium.pad, true
     )
 end
 
@@ -300,7 +307,7 @@ end
 # ==============================================================================
 
 """
-    benchmark_shots(model, rec_x, rec_z, src_x, src_z; config, n_warmup=2)
+    benchmark_shots(model, rec_x, rec_z, src_x, src_z; nt, f0, n_warmup=2, kwargs...)
 
 Benchmark shot simulation performance with proper warmup.
 
@@ -310,15 +317,17 @@ Benchmark shot simulation performance with proper warmup.
 - `src_x, src_z`: Source positions for benchmark
 
 # Keyword Arguments
-- `config`: Simulation configuration
-- `n_warmup`: Number of warmup shots (default: 2)
+- `nt::Int`: Number of time steps (required)
+- `f0::Real`: Source frequency (required)
+- `n_warmup::Int=2`: Number of warmup shots
+- Other kwargs passed to BatchSimulator
 
 # Returns
 - NamedTuple with timing results
 
 # Example
 ```julia
-result = benchmark_shots(model, rec_x, rec_z, src_x, src_z; config=config)
+result = benchmark_shots(model, rec_x, rec_z, src_x, src_z; nt=3000, f0=15.0)
 println("Time per shot: \$(result.time_per_shot)s")
 ```
 """
@@ -328,9 +337,11 @@ function benchmark_shots(
     rec_z::Vector{<:Real},
     src_x::Vector{<:Real},
     src_z::Vector{<:Real};
-    config::SimulationConfig=SimulationConfig(),
-    be::AbstractBackend=is_cuda_available() ? backend(:cuda) : backend(:cpu),
-    n_warmup::Int=2
+    nt::Int,
+    f0::Real,
+    be::Union{AbstractBackend,Nothing}=nothing,
+    n_warmup::Int=2,
+    kwargs...
 )
     println("="^60)
     println("  ElasticWave2D.jl Shot Benchmark")
@@ -338,11 +349,12 @@ function benchmark_shots(
     println()
 
     n_shots = length(src_x)
+    be = be === nothing ? (is_cuda_available() ? backend(:cuda) : backend(:cpu)) : be
 
     # Initialize
     println("Initializing BatchSimulator...")
     t_init = time()
-    sim = BatchSimulator(model, rec_x, rec_z; config=config, be=be)
+    sim = BatchSimulator(model, rec_x, rec_z; nt=nt, f0=f0, be=be, kwargs...)
 
     # Synchronize if CUDA
     if sim.backend isa CUDABackend

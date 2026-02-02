@@ -6,14 +6,19 @@
 # Project Structure:
 # ==================
 # src/
-# ├── compute/            # Hardware abstraction
-# ├── core/               # Fundamental data structures
-# ├── physics/            # Physical laws and numerical kernels
-# ├── initialization/     # Setup routines
-# ├── solver/             # Solvers and orchestration
-# ├── workflow/           # High-level API
-# ├── io/                 # Input/Output
-# └── visualization/      # Plotting
+# ├── api/               # High-level user API (recommended entry point)
+# ├── compute/           # Hardware abstraction (CPU/CUDA)
+# ├── core/              # Fundamental data structures
+# ├── physics/           # Physical laws and numerical kernels
+# ├── initialization/    # Setup routines
+# ├── solver/            # Solvers and orchestration
+# ├── io/                # Input/Output
+# └── visualization/     # Plotting and video
+#
+# Usage:
+# ======
+#   using ElasticWave2D.API
+#   result = simulate(model, SourceConfig(...), line_receivers(...))
 #
 # ==============================================================================
 
@@ -51,7 +56,7 @@ is_cuda_available() = CUDA_AVAILABLE[]
 is_cuda_functional() = CUDA_AVAILABLE[]
 
 # ==============================================================================
-# Exports
+# Exports - Core internals (for advanced users)
 # ==============================================================================
 
 # --- Compute ---
@@ -60,12 +65,10 @@ export CPU_BACKEND, CUDA_BACKEND
 export backend, to_device, synchronize
 export is_cuda_available, is_cuda_functional
 
-# --- Core ---
+# --- Core Types ---
 export Wavefield, Medium, HABCConfig
-export Source, StressSource, Receivers, SimParams
-export ShotConfig, MultiShotConfig, ShotResult
-export VelocityModel
-export BoundaryConfig
+export Source, StressSource, ForceSource, Receivers, SimParams
+export ShotResult, VelocityModel, BoundaryConfig
 
 # --- Initialization ---
 export init_medium, init_wavefield, init_habc, setup_receivers
@@ -79,7 +82,7 @@ export gaussian_valley, gaussian_hill, tilted_surface, step_surface
 export random_surface, combine_surfaces
 export validate_surface_elevation
 
-# --- Wavelet (★ NEW) ---
+# --- Wavelet ---
 export ricker_wavelet, gaussian_wavelet
 export normalize_wavelet, wavelet_info, validate_external_wavelet
 
@@ -91,18 +94,8 @@ export inject_source!, record_receivers!, reset!
 
 # --- Solver ---
 export TimeStepInfo
-export time_step!, run_time_loop!
-export run_shot!, run_shots!, run_shots_fast!
+export time_step!, run_time_loop!, run_time_loop_with_boundaries!
 export BatchSimulator, simulate_shot!, simulate_shots!, benchmark_shots
-export get_gpu_info, print_hardware_info
-export run_shots_multi_gpu!, run_shots_auto!
-
-# --- Workflow (API) ---
-export SimulationConfig, SimulationResult, simulate!
-export SimpleConfig, TopographyConfig
-export create_homogeneous_model, create_layered_model, create_gradient_model
-export SourceConfig, ReceiverConfig
-export seismic_survey
 
 # --- Visualization ---
 export VideoConfig, FieldRecorder, MultiFieldRecorder
@@ -127,7 +120,6 @@ include("compute/backend_types.jl")
 include("core/simulation_types.jl")
 include("core/velocity_model.jl")
 include("core/boundary_configuration.jl")
-include("core/simulation_configuration.jl")
 
 # 3. Physics (Numerical Kernels)
 include("physics/wave_propagation/velocity_kernel.jl")
@@ -135,9 +127,9 @@ include("physics/wave_propagation/stress_kernel.jl")
 include("physics/boundaries/absorbing_boundary.jl")
 include("physics/boundaries/vacuum_boundary.jl")
 include("physics/interaction/source_receiver_kernel.jl")
-include("physics/interaction/wavelet.jl")  # ★ NEW: Wavelet generation
+include("physics/interaction/wavelet.jl")
 
-# 4. Visualization (Must be defined before Solver/Workflow)
+# 4. Visualization
 include("visualization/wavefield_video.jl")
 include("visualization/static_plots.jl")
 
@@ -152,17 +144,13 @@ include("solver/shot_manager.jl")
 include("solver/parallel_executor.jl")
 include("solver/batch_runner.jl")
 
-# 7. Workflow (High-Level API)
-include("workflow/simulation_api.jl")
-include("workflow/simplified_api.jl")
-
-# 8. IO (Input/Output)
+# 7. IO (Input/Output)
 include("io/model_io.jl")
 include("io/seismic_data_io.jl")
 include("io/geometry_io.jl")
 include("io/output_manager.jl")
 
+# 8. High-level API (recommended for most users)
 include("api/API.jl")
-include("deprecations.jl")
 
 end # module ElasticWave2D

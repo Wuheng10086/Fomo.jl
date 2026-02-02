@@ -1,37 +1,38 @@
 # ElasticWave2D.jl
 
-[English](README.md) | **🇨🇳 中文**
+**中文** | [🇺🇸 English](README.md)
 
 <p align="center">
-  <b>基于Julia的GPU加速二维弹性波模拟</b><br>
-  <i>在笔记本上运行地震正演模拟 - 无需集群，无需复杂配置</i>
+  <b>基于 Julia 的 GPU 加速二维弹性波模拟</b><br>
+  <i>在你的笔记本上运行地震正演</i>
 </p>
 
 <p align="center">
   <img src="docs/images/wavefield.gif" width="600" alt="波场动画">
 </p>
 
-## 为什么选择这个项目？
+## 为什么做这个？
 
-传统地震模拟代码安装困难、文档匮乏、依赖HPC集群。**ElasticWave2D.jl** 不一样：
+**ElasticWave2D.jl** 是一个纯 Julia 的二维弹性波模拟工具：
 
-- ✅ **一行安装** — 纯Julia，无需编译Fortran/C
-- ✅ **游戏显卡可用** — GTX 1060、RTX 3060 等
-- ✅ **CPU也优化** — 使用 `julia -t auto` 多线程加速
-- ✅ **学生友好** — 清晰示例，可读代码
-- ✅ **灵活边界** — HABC、自由表面、真空公式
+- ✅ **一行安装** —— 纯 Julia，无需编译
+- ✅ **支持 GPU** —— GTX 1060、RTX 3060 等消费级显卡
+- ✅ **CPU 多线程** —— `julia -t auto` 自动并行
+- ✅ **代码清晰** —— 便于学习和修改
+- ✅ **边界条件** —— HABC、镜像法、真空层
 
-## 功能特性
+## 特性
 
-| 特性 | 描述 |
+| 特性 | 说明 |
 |------|------|
-| **GPU加速** | CUDA.jl后端，比CPU快10-50倍 |
-| **CPU优化** | 多线程内核，`julia -t auto` |
-| **交错网格有限差分** | 2-10阶精度 (Virieux 1986) |
-| **HABC边界** | Higdon吸收边界条件 (Ren & Liu 2014) |
-| **真空公式** | 支持不规则地形、隧道、溶洞 (Zeng et al. 2012) |
-| **视频录制** | 波场快照 → MP4 |
-| **多种格式** | SEG-Y, Binary, HDF5, NPY, MAT, JLD2 |
+| **GPU 加速** | 基于 CUDA.jl，比 CPU 快 10-50 倍 |
+| **CPU 多线程** | `julia -t auto` 自动并行 |
+| **交错网格有限差分** | 2-10 阶精度 (Virieux 1986) |
+| **HABC 边界** | Higdon 吸收边界 (Ren & Liu 2014) |
+| **镜像法** | 自由表面边界条件 (Robertsson 1996) |
+| **真空层** | 支持地形起伏、隧道、空腔 (Zeng et al. 2012) |
+| **视频录制** | 波场快照导出 MP4/GIF |
+| **多种格式** | JLD2、二进制、SEG-Y（计划中） |
 
 ## 安装
 
@@ -40,173 +41,241 @@ using Pkg
 Pkg.add(url="https://github.com/Wuheng10086/ElasticWave2D.jl")
 ```
 
-**环境要求**：Julia 1.9+，GPU可选（自动检测CUDA）
+**环境要求**：Julia 1.9+，GPU 可选（自动检测 CUDA）。
 
 ## 快速开始
 
 ```julia
-using ElasticWave2D
+using ElasticWave2D.API
 
-# 创建简单的双层模型
+# 创建一个简单的双层模型
 nx, nz = 200, 100
-dx, dz = 10.0f0, 10.0f0
+dx = 10.0f0
 
 vp = fill(2000.0f0, nz, nx)
 vs = fill(1200.0f0, nz, nx)
 rho = fill(2000.0f0, nz, nx)
 vp[50:end, :] .= 3500.0f0  # 下层速度更快
 
-model = VelocityModel(vp, vs, rho, dx, dz)
+model = VelocityModel(vp, vs, rho, dx, dx)
 
-# 观测系统
-src_x, src_z = 1000.0f0, 20.0f0
-rec_x = Float32.(collect(100:10:1900))
-rec_z = fill(10.0f0, length(rec_x))
-
-# 使用真空自由表面运行模拟
-result = seismic_survey(
+# 运行模拟
+result = simulate(
     model,
-    (src_x, src_z),
-    (rec_x, rec_z);
-    surface_method = :vacuum,    # :vacuum, :image, 或 :absorbing
-    vacuum_layers = 5,
-    config = SimulationConfig(nt=1000, f0=20.0f0)
+    SourceConfig(1000.0, 20.0; f0=20.0),           # 震源位于 (1000m, 20m深度)
+    line_receivers(100.0, 1900.0, 181; z=10.0);    # 181 个检波器
+    config = SimConfig(nt=1000, boundary=Vacuum(10))
 )
+
+# 获取结果
+println("道集大小: ", size(result.gather))
+plot_gather(result)
 ```
 
 ## 示例
 
 ### 🎬 弹性波演示
-双层介质中的高分辨率波传播，带视频输出。
+双层介质中的波传播，带视频输出。
 
-```bash
-julia -t auto examples/elastic_wave_demo.jl
+```julia
+using ElasticWave2D.API
+
+model = VelocityModel(vp, vs, rho, 10.0f0, 10.0f0)
+
+result = simulate(
+    model,
+    SourceConfig(2000.0, 50.0, Ricker(15.0)),
+    line_receivers(100, 3900, 191);
+    config = SimConfig(nt=3000, boundary=FreeSurface()),
+    video = Video(fields=[:vz], interval=20, fps=30)
+)
 ```
 
 <p align="center">
-  <img src="docs/images/elastic_wave_setup.png" width="400" alt="模型设置">
-  <img src="docs/images/elastic_wave_gather.png" width="400" alt="地震道集">
+  <img src="docs/images/elastic_wave_setup.png" width="400" alt="弹性波设置">
+  <img src="docs/images/elastic_wave_gather.png" width="400" alt="弹性波道集">
 </p>
 
 ---
 
-### 🏗️ 隧道检测（工程应用）
-利用地震波绕射检测地下空洞。真空公式同时用于自由表面和隧道空腔。
+### 🏗️ 隧道探测
+用地震绕射波探测地下空腔，真空层处理自由表面和隧道。
 
-```bash
-julia -t auto examples/tunnel_detection_demo.jl
+```julia
+# 创建带隧道的模型（ρ=0 表示空腔）
+rho[40:45, 95:105] .= 0.0f0  # 隧道空腔
+
+result = simulate(
+    model,
+    SourceConfig(500.0, 10.0; f0=50.0),
+    line_receivers(100, 900, 81);
+    config = SimConfig(nt=2000, boundary=Vacuum(10))
+)
 ```
 
 <p align="center">
-  <img src="docs/images/tunnel_setup.png" width="400" alt="隧道模型">
+  <img src="docs/images/tunnel_setup.png" width="400" alt="隧道设置">
   <img src="docs/images/tunnel_gather.png" width="400" alt="隧道道集">
 </p>
 
-**观察要点**：隧道边缘的绕射波、隧道后方的阴影区。
+**观察要点**：隧道边缘的绕射波，隧道后方的阴影区。
 
 ---
 
-### 🛢️ 勘探地震（石油勘探）
-对背斜构造成像——经典的油气圈闭。
-
-```bash
-julia -t auto examples/exploration_seismic_demo.jl
-```
+### 🛢️ 油气勘探
+背斜构造成像，经典的油气圈闭。
 
 <p align="center">
-  <img src="docs/images/exploration_setup.png" width="400" alt="勘探模型">
+  <img src="docs/images/exploration_setup.png" width="400" alt="勘探设置">
   <img src="docs/images/exploration_gather.png" width="400" alt="勘探道集">
 </p>
 
-**观察要点**：背斜顶部的反射"上拉"现象、多层反射。
+**观察要点**：背斜顶部的反射"上拉"，多层反射波。
 
 ---
 
 ### 🔬 边界条件对比
-并排比较不同的地表处理方法。
-
-```bash
-julia -t auto examples/seismic_survey_demo.jl
-```
 
 | 方法 | 面波 | 适用场景 |
 |------|------|----------|
-| `:absorbing` | ❌ | 仅体波 |
-| `:free_surface` | ✅ | 经典显式边界条件 |
-| `:vacuum` | ✅ | 统一方法（推荐） |
+| `Absorbing()` | ❌ | 仅体波研究 |
+| `FreeSurface()` | ✅ | 精确的平坦自由表面（镜像法） |
+| `Vacuum(n)` | ✅ | 地形起伏、空腔（推荐） |
 
-**面波对比** — 两种方法都能产生Rayleigh波，结果几乎一致：
+```julia
+# 对比不同边界条件
+for boundary in [Absorbing(), FreeSurface(), Vacuum(10)]
+    result = simulate(model, source, receivers;
+        config = SimConfig(nt=2000, boundary=boundary))
+end
+```
 
 <p align="center">
-  <img src="docs/images/freesurface_gather.png" width="400" alt="显式自由表面">
-  <img src="docs/images/vacuum_gather.png" width="400" alt="真空公式">
+  <img src="docs/images/freesurface_gather.png" width="400" alt="自由表面">
+  <img src="docs/images/vacuum_gather.png" width="400" alt="真空层">
 </p>
 <p align="center">
-  <i>左：显式自由表面边界条件 | 右：真空公式</i>
+  <i>左：镜像法 | 右：真空层公式 —— 结果几乎一致</i>
 </p>
-
-真空方法提供更大灵活性（支持地形、内部空洞），精度相当。
 
 ## API 参考
 
-### `seismic_survey` — 高级接口
+### 核心类型
 
 ```julia
-seismic_survey(model, source, receivers;
-    surface_method = :vacuum,     # :vacuum, :free_surface, :absorbing
-    vacuum_layers = 10,           # 真空层数（仅用于 :vacuum）
-    config = SimulationConfig(),
-    video_config = nothing
+# 子波
+Ricker(f0)                    # 主频 f0 的 Ricker 子波
+Ricker(f0, delay)             # 带延迟
+CustomWavelet(data)           # 自定义子波
+
+# 震源
+SourceConfig(x, z; f0=15.0)                    # 简单写法
+SourceConfig(x, z, Ricker(15.0), ForceZ)       # 完整写法
+# 震源类型: Explosion, ForceX, ForceZ, StressTxx, StressTzz, StressTxz
+
+# 检波器
+line_receivers(x0, x1, n; z=0.0)              # 一排检波器
+ReceiverConfig(x_vec, z_vec)                   # 自定义位置
+ReceiverConfig(x_vec, z_vec, Vx)              # 记录 Vx
+
+# 边界
+FreeSurface()      # 镜像法（平自由表面）
+Absorbing()        # 四边 HABC
+Vacuum(n)          # 顶部 n 层真空（推荐）
+
+# 配置
+SimConfig(
+    nt = 3000,           # 时间步数
+    dt = nothing,        # 自动算（CFL）
+    cfl = 0.4,           # CFL 数
+    fd_order = 8,        # 差分精度 (2,4,6,8,10)
+    boundary = Vacuum(10),
+    output_dir = "outputs"
+)
+
+# 视频
+Video(
+    fields = [:vz],      # 记录哪些场
+    interval = 50,       # 每 N 步存一帧
+    fps = 20,
+    format = :mp4        # :mp4 或 :gif
 )
 ```
 
-### `simulate!` — 底层接口
+### 主要函数
 
 ```julia
-result = simulate!(model, src_x, src_z, rec_x, rec_z;
-    config = SimulationConfig(
-        nt = 3000,           # 时间步数
-        f0 = 15.0f0,         # 震源主频 (Hz)
-        fd_order = 8,        # 有限差分精度阶数
-        free_surface = true, # 显式自由表面边界条件
-        output_dir = "outputs"
-    ),
-    video_config = VideoConfig(
-        fields = [:vz],      # 记录垂直速度分量
-        skip = 20,           # 帧间隔
-        fps = 30
-    )
-)
+# 单炮模拟
+result = simulate(model, source, receivers; config, video=nothing)
+
+# 批量多炮
+using ElasticWave2D
+sim = BatchSimulator(model, rec_x, rec_z; nt=3000, f0=15.0)
+gathers = simulate_shots!(sim, src_x_vec, src_z_vec)
+
+# 结果存取
+save_result(result, "shot_001.jld2")
+result = load_result("shot_001.jld2")
+
+# 绑图（需要 Plots.jl）
+plot_gather(result)
+plot_trace(result, 50)
 ```
 
-### 地表方法对比
+### 结果结构
 
-| 参数 | `free_surface=true` | `surface_method=:vacuum` |
-|------|---------------------|--------------------------|
-| 实现方式 | 显式边界条件 | 顶部ρ=0层 |
-| 地形 | ❌ 仅平面 | ✅ 任意形状 |
-| 内部空洞 | ❌ | ✅ 隧道、溶洞 |
-| 一致性 | — | 全域物理一致 |
+```julia
+result.gather      # [nt × n_receivers] 地震记录
+result.dt          # 时间步长
+result.nt          # 时间步数
+result.snapshots   # 波场快照（需启用视频录制）
+```
 
 ## 性能
 
-**GPU** (RTX 3060, 12GB):
+**GPU**（RTX 3060, 12GB）：
 
-| 网格大小 | 时间步数 | 运行时间 |
-|----------|----------|----------|
+| 网格 | 时间步 | 耗时 |
+|------|--------|------|
 | 400×200 | 3000 | ~8 秒 |
 | 800×400 | 5000 | ~45 秒 |
 | 1200×600 | 8000 | ~3 分钟 |
 
-**CPU** (8核，使用 `-t auto`)：比GPU慢约10-20倍，但中小规模模型仍然实用。
+**CPU**（8核，`-t auto`）：约为 GPU 的 1/10 ~ 1/20 速度。
 
-## 为什么写这个项目
+### 多炮性能
 
-作为一个地球物理专业的学生，我被现有的地震模拟工具折磨得够呛——SOFI2D、SPECFEM这些软件都要在Linux上跑，需要配置`make`，各种依赖问题让人头大。我只是想在自己的笔记本上跑个正演，却要花好几天配环境。
+```julia
+using ElasticWave2D
+result = benchmark_shots(model, rec_x, rec_z, src_x, src_z; nt=3000, f0=15.0)
+# GPU 中等网格约 0.1-0.3 秒/炮
+```
 
-另外我发现PML（完美匹配层）边界计算量很大。而HABC（Higdon吸收边界条件）能达到相近的吸收效果，效率却高得多——当你用的是游戏显卡而不是超算集群时，这很重要。
+## 为什么做这个
 
-所以我写了ElasticWave2D.jl——一个我希望自己刚入门时就有的工具。如果你也是一个只有笔记本电脑但充满好奇心的学生，这个项目就是为你准备的。
+作为地球物理专业学生，需要一个轻量的正演工具用于快速实验和学习。SOFI2D、SPECFEM 等软件功能完善，但配置相对复杂。
+
+另外，HABC 边界条件相比 PML 计算效率更高，适合在普通硬件上运行。
+
+基于以上需求开发了 ElasticWave2D.jl。
+
+## 项目结构
+
+```
+ElasticWave2D.jl/
+├── src/
+│   ├── api/                # 高层 API（推荐用这个）
+│   ├── compute/            # CPU/GPU 抽象
+│   ├── core/               # 基础类型
+│   ├── physics/            # 计算核心
+│   ├── initialization/     # 初始化
+│   ├── solver/             # 时间步进、批量计算
+│   ├── io/                 # 读写
+│   └── visualization/      # 画图、视频
+├── examples/               # 示例
+├── test/                   # 测试
+└── docs/                   # 文档
+```
 
 ## 参考文献
 
@@ -218,8 +287,6 @@ result = simulate!(model, src_x, src_z, rec_x, rec_z;
 
 ## 引用
 
-如果您在研究中使用了 ElasticWave2D.jl，请引用：
-
 ```bibtex
 @software{elasticwave2d,
   author = {Wu Heng},
@@ -229,39 +296,9 @@ result = simulate!(model, src_x, src_z, rec_x, rec_z;
 }
 ```
 
-## 为什么写这个项目
-
-作为一名地球物理学生，我被现有工具折磨过：
-
-- **SOFI3D、Specfem2D** — 需要Linux、`make`、MPI配置……我花在调试编译错误上的时间比做研究还多。
-- **PML边界条件** — 虽然广泛使用，但计算量大。HABC用更少的层数和计算量就能达到类似的吸收效果。
-
-所以我写了 ElasticWave2D.jl：一个**开箱即用**的工具 — `Pkg.add()` 就能跑。不用cmake，不用Fortran编译器，不用配MPI。
-
-如果你是一个只想跑几个模拟、学习波动物理的学生，这个项目就是为你准备的。
-
-## 目录结构
-
-本项目采用领域驱动设计（Domain-Driven Design）重构了目录结构，以确保清晰度和可维护性：
-
-```
-ElasticWave2D.jl/
-├── src/
-│   ├── compute/            # 算力后端 (CPU/GPU 抽象层)
-│   ├── core/               # 核心类型 (Wavefield, Medium, Configs)
-│   ├── physics/            # 物理内核 (速度/应力更新, 边界条件)
-│   ├── initialization/     # 初始化例程 (介质建模, 地形生成)
-│   ├── solver/             # 求解器 (时间步进, 炮集管理, 并行计算)
-│   ├── workflow/           # 工作流 (高级用户 API)
-│   ├── io/                 # 数据读写 (模型加载, 地震数据 IO)
-│   └── visualization/      # 可视化 (绘图与视频生成)
-├── examples/               # 使用示例
-├── tests/                  # 单元与集成测试
-├── docs/                   # 文档
-└── scripts/                # 实用脚本
-```
-
 ## 贡献
+
+欢迎提交 Issue 和 PR。
 
 ## 许可证
 
