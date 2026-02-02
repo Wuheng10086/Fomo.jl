@@ -27,26 +27,26 @@ This function:
 - `on_step`: Callback function for each time step (e.g., VideoRecorder)
 """
 function run_shot!(backend::AbstractBackend, W::Wavefield, M::Medium, H::HABCConfig,
-                   a, src::Source, rec::Receivers, params::SimParams;
-                   shot_id::Int=1, progress::Bool=false, on_step=nothing)
-    
+    a, src::Source, rec::Receivers, params::SimParams;
+    shot_id::Int=1, progress::Bool=false, on_step=nothing)
+
     # Reset wavefield
     reset!(backend, W)
-    
+
     # Clear receiver data
     fill!(rec.data, 0.0f0)
-    
+
     # Run simulation
-    run_time_loop!(backend, W, M, H, a, src, rec, params; 
-                   progress=progress, on_step=on_step)
-    
+    run_time_loop!(backend, W, M, H, a, src, rec, params;
+        progress=progress, on_step=on_step)
+
     # Get gather (copy to CPU if on GPU)
     gather = _get_gather(backend, rec)
-    
+
     # Get receiver indices (ensure CPU arrays)
     rec_i = _to_cpu_vec(rec.i)
     rec_j = _to_cpu_vec(rec.j)
-    
+
     return ShotResult(gather, shot_id, src.i, src.j, rec_i, rec_j)
 end
 
@@ -90,14 +90,14 @@ end
 
 Create multi-shot configuration from position arrays.
 """
-function MultiShotConfig(x_positions::Vector{<:Real}, z_positions::Vector{<:Real}, 
-                         wavelet::Vector{Float32}; source_type::Symbol=:pressure)
+function MultiShotConfig(x_positions::Vector{<:Real}, z_positions::Vector{<:Real},
+    wavelet::Vector{Float32}; source_type::Symbol=:pressure)
     n = length(x_positions)
     @assert length(z_positions) == n "x and z must have same length"
-    
-    shots = [ShotConfig(Float32(x_positions[i]), Float32(z_positions[i]), i) 
+
+    shots = [ShotConfig(Float32(x_positions[i]), Float32(z_positions[i]), i)
              for i in 1:n]
-    
+
     return MultiShotConfig(shots, wavelet, source_type)
 end
 
@@ -127,66 +127,66 @@ Run multiple shots with MEMORY REUSE for maximum performance.
 - `verbose`: Print shot progress info (default: true)
 """
 function run_shots!(backend::AbstractBackend, W::Wavefield, M::Medium, H::HABCConfig,
-                    a, rec_template::Receivers, shot_config::MultiShotConfig, params::SimParams;
-                    on_shot_complete=nothing, on_step=nothing, progress::Bool=false,
-                    verbose::Bool=true)
-    
+    a, rec_template::Receivers, shot_config::MultiShotConfig, params::SimParams;
+    on_shot_complete=nothing, on_step=nothing, progress::Bool=false,
+    verbose::Bool=true)
+
     n_shots = length(shot_config.shots)
     results = Vector{ShotResult}(undef, n_shots)
-    
+
     # Prepare wavelet on device ONCE
     wavelet_device = to_device(shot_config.wavelet, backend)
-    
+
     # PRE-ALLOCATE receiver data buffer ONCE (will be reused)
     rec = _create_receivers(backend, rec_template, params.nt)
-    
+
     if verbose
-        @info "Running shots" n_shots=n_shots backend=typeof(backend)
+        @info "Running shots" n_shots = n_shots backend = typeof(backend)
     end
-    
+
     t_start = time()
-    
+
     for (i, shot) in enumerate(shot_config.shots)
         # Create source for this shot (lightweight - only indices change)
         src = _create_source(backend, M, shot, wavelet_device, shot_config.source_type)
-        
+
         # REUSE receiver buffer - just clear data (no reallocation)
         fill!(rec.data, 0.0f0)
-        
+
         # Reset wavefield
         reset!(backend, W)
-        
+
         # Run time loop
         run_time_loop!(backend, W, M, H, a, src, rec, params;
-                      progress=progress, on_step=on_step)
-        
+            progress=progress, on_step=on_step)
+
         # Get result
         gather = _get_gather(backend, rec)
         rec_i = _to_cpu_vec(rec.i)
         rec_j = _to_cpu_vec(rec.j)
         result = ShotResult(gather, shot.shot_id, src.i, src.j, rec_i, rec_j)
-        
+
         results[i] = result
-        
+
         # Callback
         if on_shot_complete !== nothing
             on_shot_complete(result)
         end
-        
+
         # Minimal progress output (every 10% or at end)
         if verbose && (i % max(1, n_shots ÷ 10) == 0 || i == n_shots)
             elapsed = time() - t_start
             avg_time = elapsed / i
             eta = avg_time * (n_shots - i)
-            @info "Shot progress" completed="$i/$n_shots" elapsed_s=round(elapsed, digits=1) eta_s=round(eta, digits=1)
+            @info "Shot progress" completed = "$i/$n_shots" elapsed_s = round(elapsed, digits=1) eta_s = round(eta, digits=1)
         end
     end
-    
+
     if verbose
         total_time = time() - t_start
-        @info "All shots completed" total_s=round(total_time, digits=2) per_shot_s=round(total_time/n_shots, digits=3)
+        @info "All shots completed" total_s = round(total_time, digits=2) per_shot_s = round(total_time / n_shots, digits=3)
     end
-    
+
     return results
 end
 
@@ -202,35 +202,35 @@ Returns only gather matrices (no ShotResult wrapper).
 No logging, no callbacks - pure computation.
 """
 function run_shots_fast!(backend::AbstractBackend, W::Wavefield, M::Medium, H::HABCConfig,
-                         a, rec_template::Receivers, shot_config::MultiShotConfig, params::SimParams)
-    
+    a, rec_template::Receivers, shot_config::MultiShotConfig, params::SimParams)
+
     n_shots = length(shot_config.shots)
     gathers = Vector{Matrix{Float32}}(undef, n_shots)
-    
+
     # Prepare wavelet on device ONCE
     wavelet_device = to_device(shot_config.wavelet, backend)
-    
+
     # PRE-ALLOCATE receiver data buffer ONCE
     rec = _create_receivers(backend, rec_template, params.nt)
-    
+
     for (i, shot) in enumerate(shot_config.shots)
         # Reset wavefield
         reset!(backend, W)
-        
+
         # Create source
         src = _create_source(backend, M, shot, wavelet_device, shot_config.source_type)
-        
+
         # Clear receiver data
         fill!(rec.data, 0.0f0)
-        
+
         # Run simulation (no progress, no callbacks)
-        run_time_loop!(backend, W, M, H, a, src, rec, params; 
-                       progress=false, on_step=nothing)
-        
+        run_time_loop!(backend, W, M, H, a, src, rec, params;
+            progress=false, on_step=nothing)
+
         # Copy gather to CPU
         gathers[i] = _get_gather(backend, rec)
     end
-    
+
     return gathers
 end
 

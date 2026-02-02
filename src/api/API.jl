@@ -8,155 +8,23 @@ module API
 
 using ..ElasticWave2D: VelocityModel, Wavefield, Medium, SimParams,
     Source, StressSource, ForceSource, Receivers,
-    init_medium, init_habc, get_fd_coefficients,
+    init_medium, init_medium_vacuum, init_habc, get_fd_coefficients,
     to_device, run_time_loop!, run_time_loop_with_boundaries!,
     CUDA_AVAILABLE, CPU_BACKEND, CUDA_BACKEND,
-    AbstractBackend, CUDABackend, BoundaryConfig
+    AbstractBackend, CUDABackend, BoundaryConfig,
+    OutputConfig, ensure_output_dirs, resolve_output_path, default_video_filename, default_result_filename,
+    generate_video, ArtifactsManifest, record_artifact!, write_manifest
 
 using Printf
 using JLD2
+using CairoMakie: Figure, Axis, heatmap!, Colorbar, save
 
-# ==============================================================================
-# Wavelet
-# ==============================================================================
-
-abstract type AbstractWavelet end
-
-struct RickerWavelet <: AbstractWavelet
-    f0::Float32
-    delay::Float32
-end
-
-Ricker(f0::Real) = RickerWavelet(Float32(f0), 1.0f0 / Float32(f0))
-Ricker(f0::Real, delay::Real) = RickerWavelet(Float32(f0), Float32(delay))
-
-struct CustomWavelet <: AbstractWavelet
-    data::Vector{Float32}
-end
-CustomWavelet(data::AbstractVector) = CustomWavelet(Float32.(data))
-
-function generate(w::RickerWavelet, dt::Float32, nt::Int)
-    wavelet = zeros(Float32, nt)
-    for i in 1:nt
-        t = (i - 1) * dt - w.delay
-        arg = (π * w.f0 * t)^2
-        wavelet[i] = Float32((1.0 - 2.0 * arg) * exp(-arg))
-    end
-    return wavelet
-end
-
-function generate(w::CustomWavelet, dt::Float32, nt::Int)
-    n = length(w.data)
-    n >= nt ? w.data[1:nt] : vcat(w.data, zeros(Float32, nt - n))
-end
-
-# ==============================================================================
-# Source
-# ==============================================================================
-
-@enum SourceMechanism Explosion ForceX ForceZ StressTxx StressTzz StressTxz
-
-struct SourceConfig
-    x::Float32
-    z::Float32
-    wavelet::AbstractWavelet
-    mechanism::SourceMechanism
-end
-
-SourceConfig(x::Real, z::Real, w::AbstractWavelet) = SourceConfig(Float32(x), Float32(z), w, Explosion)
-SourceConfig(x::Real, z::Real, w::AbstractWavelet, m::SourceMechanism) = SourceConfig(Float32(x), Float32(z), w, m)
-SourceConfig(x::Real, z::Real; f0::Real=15.0, type::SourceMechanism=Explosion) =
-    SourceConfig(Float32(x), Float32(z), Ricker(f0), type)
-
-# ==============================================================================
-# Receivers
-# ==============================================================================
-
-@enum RecordType Vz Vx Pressure
-
-struct ReceiverConfig
-    x::Vector{Float32}
-    z::Vector{Float32}
-    record::RecordType
-end
-
-ReceiverConfig(x::AbstractVector, z::AbstractVector) = ReceiverConfig(Float32.(x), Float32.(z), Vz)
-ReceiverConfig(x::AbstractVector, z::AbstractVector, r::RecordType) = ReceiverConfig(Float32.(x), Float32.(z), r)
-
-function line_receivers(x0::Real, x1::Real, n::Int; z::Real=0.0, record::RecordType=Vz)
-    ReceiverConfig(Float32.(range(x0, x1, n)), fill(Float32(z), n), record)
-end
-
-# ==============================================================================
-# Boundary
-# ==============================================================================
-
-struct Boundary
-    top::Symbol
-    nbc::Int
-    vacuum_layers::Int
-
-    function Boundary(top::Symbol, nbc::Int=50, vac::Int=10)
-        top in (:image, :habc, :vacuum) || error("top must be :image, :habc, or :vacuum")
-        new(top, nbc, vac)
-    end
-end
-
-FreeSurface(; nbc::Int=50) = Boundary(:image, nbc, 0)
-Absorbing(; nbc::Int=50) = Boundary(:habc, nbc, 0)
-Vacuum(layers::Int=10; nbc::Int=50) = Boundary(:vacuum, nbc, layers)
-
-# ==============================================================================
-# Config
-# ==============================================================================
-
-struct SimConfig
-    nt::Int
-    dt::Union{Float32,Nothing}
-    cfl::Float32
-    fd_order::Int
-    boundary::Boundary
-    output_dir::String
-end
-
-SimConfig(; nt=3000, dt=nothing, cfl=0.4, fd_order=8, boundary=FreeSurface(), output_dir="outputs") =
-    SimConfig(nt, dt === nothing ? nothing : Float32(dt), Float32(cfl), fd_order, boundary, output_dir)
-
-# ==============================================================================
-# Video
-# ==============================================================================
-
-struct VideoSettings
-    fields::Vector{Symbol}
-    interval::Int
-    fps::Int
-    colormap::Symbol
-    format::Symbol  # :gif 或 :mp4
-end
-
-Video(; fields=[:vz], interval=50, fps=20, colormap=:seismic, format=:mp4) =
-    VideoSettings(fields, interval, fps, colormap, format)
-
-# ==============================================================================
-# Result
-# ==============================================================================
-
-struct SimResult
-    gather::Matrix{Float32}
-    dt::Float32
-    nt::Int
-    source::SourceConfig
-    receivers::ReceiverConfig
-    snapshots::Union{Dict{Symbol,Array{Float32,3}},Nothing}
-    video_files::Union{Dict{Symbol,String},Nothing}
-end
-
-SimResult(g, dt, nt, s, r) = SimResult(g, dt, nt, s, r, nothing, nothing)
-SimResult(g, dt, nt, s, r, snaps) = SimResult(g, dt, nt, s, r, snaps, nothing)
-
-times(r::SimResult) = Float32.(0:r.nt-1) .* r.dt
-trace(r::SimResult, i::Int) = r.gather[:, i]
-n_receivers(r::SimResult) = size(r.gather, 2)
+using ..ElasticWave2D: AbstractWavelet, RickerWavelet, CustomWavelet, Ricker, generate,
+    SourceMechanism, Explosion, ForceX, ForceZ, StressTxx, StressTzz, StressTxz, SourceConfig,
+    RecordType, Vz, Vx, Pressure, ReceiverConfig, line_receivers,
+    Boundary, FreeSurface, Absorbing, Vacuum,
+    SimConfig, VideoSettings, Video,
+    SimResult, times, trace, n_receivers
 
 # ==============================================================================
 # IO - save_result / load_result
@@ -177,12 +45,14 @@ save_result("shot_001.jld2", result)  # 也可以
 function save_result(result::SimResult, filename::String)
     # 确保扩展名
     endswith(filename, ".jld2") || (filename *= ".jld2")
+    mkpath(dirname(filename))
 
     # 转换为可序列化的格式
     jldsave(filename;
         gather=result.gather,
         dt=result.dt,
         nt=result.nt,
+        output_dir=result.output_dir,
         source_x=result.source.x,
         source_z=result.source.z,
         source_f0=result.source.wavelet isa RickerWavelet ? result.source.wavelet.f0 : 0f0,
@@ -198,6 +68,12 @@ function save_result(result::SimResult, filename::String)
 end
 
 save_result(filename::String, result::SimResult) = save_result(result, filename)
+
+function save_result(outputs::OutputConfig, result::SimResult; name::AbstractString="result")
+    path = resolve_output_path(outputs, :results, "$(name).jld2")
+    save_result(result, path)
+    return path
+end
 
 """
     load_result(filename) -> SimResult
@@ -237,7 +113,8 @@ function load_result(filename::String)
         source,
         receivers,
         get(data, "snapshots", nothing),
-        get(data, "video_files", nothing)
+        get(data, "video_files", nothing),
+        get(data, "output_dir", "outputs")
     )
 end
 
@@ -257,9 +134,16 @@ function save_gather(result::SimResult, filename::String; format=:jld2)
     save_gather(result.gather, result.dt, filename; format=format)
 end
 
+function save_gather(outputs::OutputConfig, result::SimResult; name::AbstractString="gather", format=:jld2)
+    path = resolve_output_path(outputs, :results, "$(name).jld2")
+    save_gather(result.gather, result.dt, path; format=format)
+    return path
+end
+
 function save_gather(gather::Matrix{Float32}, dt::Real, filename::String; format=:jld2)
     if format == :jld2
         endswith(filename, ".jld2") || (filename *= ".jld2")
+        mkpath(dirname(filename))
         jldsave(filename; gather=gather, dt=Float32(dt))
     else
         error("Format $format not supported yet. Use :jld2")
@@ -286,22 +170,38 @@ end
 # simulate
 # ==============================================================================
 
+"""
+    simulate(model, source, receivers; config=SimConfig(), video=nothing) -> SimResult
+    simulate(model, sources::Vector{SourceConfig}, receivers; config=SimConfig(), video=nothing) -> Vector{SimResult}
+
+执行 2D 弹性波正演，返回道集与可选快照/视频信息。
+
+若 `config.dt == nothing`，将按 `config.cfl` 与模型最大波速自动计算稳定时间步长。
+"""
 function simulate(
     model::VelocityModel,
     source::SourceConfig,
     receivers::ReceiverConfig;
     config::SimConfig=SimConfig(),
+    outputs::Union{OutputConfig,Nothing}=nothing,
     video::Union{VideoSettings,Nothing}=nothing
 )
     be = CUDA_AVAILABLE[] ? CUDA_BACKEND : CPU_BACKEND
+    outputs = outputs === nothing ? OutputConfig(base_dir=config.output_dir) : outputs
+    ensure_output_dirs(outputs)
+    if video !== nothing && video.output_dir !== nothing
+        Base.depwarn("Video(output_dir=...) is deprecated; use outputs=OutputConfig(base_dir=...) with fixed videos/ directory.", :simulate)
+    end
 
     vp_max = maximum(model.vp)
     dt = config.dt === nothing ? config.cfl * min(model.dx, model.dz) / vp_max : config.dt
-
     working_model, z_off = _prepare_model(model, config.boundary)
-
     is_fs = config.boundary.top in (:image, :vacuum)
-    M = init_medium(working_model, config.boundary.nbc, config.fd_order, be; free_surface=is_fs)
+    M = config.boundary.top == :vacuum ?
+        init_medium_vacuum(working_model.vp, working_model.vs, working_model.rho,
+        working_model.dx, working_model.dz,
+        config.boundary.nbc, config.fd_order, be) :
+        init_medium(working_model, config.boundary.nbc, config.fd_order, be; free_surface=is_fs)
     H = init_habc(M.nx, M.nz, config.boundary.nbc, M.pad, dt, working_model.dx, working_model.dz, vp_max, be)
     a = to_device(get_fd_coefficients(config.fd_order), be)
     W = Wavefield(M.nx, M.nz, be)
@@ -320,55 +220,85 @@ function simulate(
     end
 
     gather = be isa CUDABackend ? Array(rec.data) : copy(rec.data)
+    any(.!isfinite.(gather)) && error("检测到非有限值 (NaN/Inf) 出现在采集数据中，可能是数值不稳定或边界设置问题。请检查模型与边界/时间步长。")
 
     video_files = nothing
     if video !== nothing && snaps !== nothing
-        video_files = _generate_videos(snaps, video, config.output_dir, M.pad)
+        video_files = _generate_videos(snaps, video, outputs, M.pad, dt)
     end
 
-    return SimResult(gather, dt, config.nt, source, receivers, snaps, video_files)
+    result = SimResult(gather, dt, config.nt, source, receivers, snaps, video_files, outputs.base_dir)
+    manifest = ArtifactsManifest()
+    record_artifact!(manifest, :result, resolve_output_path(outputs, :results, default_result_filename()))
+    if video_files !== nothing
+        for (field, path) in video_files
+            record_artifact!(manifest, Symbol("video_$(field)"), path)
+        end
+    end
+    write_manifest(outputs, manifest)
+    return result
 end
 
 function simulate(model::VelocityModel, sources::Vector{SourceConfig}, receivers::ReceiverConfig;
-    config::SimConfig=SimConfig(), video::Union{VideoSettings,Nothing}=nothing)
-    [simulate(model, s, receivers; config, video=i == 1 ? video : nothing) for (i, s) in enumerate(sources)]
+    config::SimConfig=SimConfig(),
+    outputs::Union{OutputConfig,Nothing}=nothing,
+    video::Union{VideoSettings,Nothing}=nothing)
+    [simulate(model, s, receivers; config, outputs, video=i == 1 ? video : nothing) for (i, s) in enumerate(sources)]
 end
 
 # ==============================================================================
 # Plotting
 # ==============================================================================
 
+"""
+    plot_gather(result; kwargs...) -> Figure
+    plot_gather(gather, dt; kwargs...) -> Figure
+
+绘制道集（Makie 后端）。可用 `output="xxx.png"` 保存图片。
+"""
 function plot_gather(result::SimResult; kwargs...)
     plot_gather(result.gather, result.dt; kwargs...)
 end
 
 function plot_gather(gather::Matrix, dt::Real;
     cmap=:seismic, clim=nothing, title="Seismic Gather",
-    xlabel="Trace", ylabel="Time (s)", save=nothing)
+    xlabel="Trace", ylabel="Time (s)", output=nothing)
 
-    _check_plots()
-
+    any(.!isfinite.(gather)) && error("采集数据包含 NaN/Inf，已停止绘图。")
     nt, nrec = size(gather)
-    t = (0:nt-1) .* dt
+    t = Float32.((0:nt-1) .* dt)
 
     if clim === nothing
         vmax = _pctl(abs.(gather), 99)
+        vmax = vmax == 0 ? 1.0f0 : vmax
         clim = (-vmax, vmax)
     end
 
-    plt = Main.Plots.heatmap(1:nrec, t, gather; c=cmap, clim=clim, yflip=true,
-        xlabel=xlabel, ylabel=ylabel, title=title)
+    fig = Figure(size=(1000, 600), fontsize=14)
+    ax = Axis(fig[1, 1], xlabel=xlabel, ylabel=ylabel, title=title, yreversed=true)
+    hm = heatmap!(ax, 1:nrec, t, gather'; colormap=cmap, colorrange=clim)
+    Colorbar(fig[1, 2], hm, label="Amplitude")
 
-    save !== nothing && Main.Plots.savefig(plt, save)
-    return plt
+    output !== nothing && save(output, fig)
+    return fig
 end
 
+"""
+    plot_trace(result, i; title, xlabel, ylabel)
+
+绘制单道曲线（Plots.jl 后端）。使用前需 `using Plots`。
+"""
 function plot_trace(result::SimResult, i::Int; title="Trace $i", xlabel="Time (s)", ylabel="Amplitude")
     _check_plots()
     t = times(result)
     Main.Plots.plot(t, trace(result, i); xlabel=xlabel, ylabel=ylabel, title=title, legend=false)
 end
 
+"""
+    plot_snapshot(result, field, frame; cmap, clim, title, save)
+
+绘制某个场在某一帧的快照（Plots.jl 后端）。使用前需在 `simulate(...; video=Video(...))` 产生快照。
+"""
 function plot_snapshot(result::SimResult, field::Symbol, frame::Int;
     cmap=:seismic, clim=nothing, title=nothing, save=nothing)
 
@@ -390,6 +320,11 @@ function plot_snapshot(result::SimResult, field::Symbol, frame::Int;
     return plt
 end
 
+"""
+    plot_model(model; field=:vp, cmap=:viridis, title=nothing, save=nothing)
+
+绘制速度模型字段（Plots.jl 后端）。使用前需 `using Plots`。
+"""
 function plot_model(model::VelocityModel; field::Symbol=:vp, cmap=:viridis, title=nothing, save=nothing)
     _check_plots()
 
@@ -408,52 +343,25 @@ end
 # Video Generation (GIF & MP4)
 # ==============================================================================
 
-function _generate_videos(snaps::Dict, video::VideoSettings, output_dir::String, pad::Int)
-    if !isdefined(Main, :Plots)
-        @warn "Plots.jl not loaded, skipping video generation. Run: using Plots"
-        return nothing
-    end
-
-    mkpath(output_dir)
+function _generate_videos(snaps::Dict, video::VideoSettings, outputs::OutputConfig, pad::Int, dt::Float32)
+    ensure_output_dirs(outputs)
     video_files = Dict{Symbol,String}()
+    ext = video.format == :gif ? "gif" : "mp4"
 
     for field in video.fields
         haskey(snaps, field) || continue
-
         data = snaps[field]
         nx, nz, nframes = size(data)
 
-        # 裁剪 padding
         x1, x2 = pad + 1, nx - pad
         z1, z2 = pad + 1, nz - pad
         inner = data[x1:x2, z1:z2, :]
 
-        vmax = _pctl(abs.(inner), 99)
-        vmax = vmax == 0 ? 1.0f0 : vmax
-        clim = (-vmax, vmax)
-
-        # 根据格式选择扩展名
-        ext = video.format == :mp4 ? "mp4" : "gif"
-        filepath = joinpath(output_dir, "wavefield_$(field).$(ext)")
-
-        # 生成动画
-        anim = Main.Plots.Animation()
-        for i in 1:nframes
-            Main.Plots.heatmap(inner[:, :, i]'; c=video.colormap, clim=clim, yflip=true,
-                title="$field - Frame $i/$nframes", aspect_ratio=:equal,
-                size=(600, 500))
-            Main.Plots.frame(anim)
-        end
-
-        # 保存为 GIF 或 MP4
-        if video.format == :mp4
-            Main.Plots.mp4(anim, filepath; fps=video.fps)
-        else
-            Main.Plots.gif(anim, filepath; fps=video.fps)
-        end
+        times = Float32.((1:nframes) .* (video.interval * dt))
+        filepath = resolve_output_path(outputs, :videos, default_video_filename(field; ext=ext))
+        generate_video(inner, filepath; field_name=field, fps=video.fps, colormap=video.colormap, times=times)
 
         video_files[field] = filepath
-        @info "Video saved" file = filepath format = video.format frames = nframes
     end
 
     return video_files
@@ -470,6 +378,7 @@ end
 
 # 关键字参数
 - `filename`: 输出文件名
+- `output_dir`: 输出目录；`nothing` 表示使用 `result.output_dir`
 - `fps`: 帧率，默认 20
 - `format`: :mp4 或 :gif，默认 :mp4
 - `colormap`: 配色方案，默认 :seismic
@@ -484,49 +393,28 @@ make_video(result, :vz; format=:gif)
 """
 function make_video(result::SimResult, field::Symbol;
     filename::Union{String,Nothing}=nothing,
+    outputs::Union{OutputConfig,Nothing}=nothing,
     fps::Int=20,
     format::Symbol=:mp4,
     colormap::Symbol=:seismic,
     clim=nothing)
 
-    _check_plots()
     result.snapshots === nothing && error("No snapshots in result")
     haskey(result.snapshots, field) || error("Field :$field not found")
 
     data = result.snapshots[field]
-    nx, nz, nframes = size(data)
+    outputs = outputs === nothing ? OutputConfig(base_dir=result.output_dir) : outputs
+    ensure_output_dirs(outputs)
 
-    # 自动文件名
-    if filename === nothing
-        ext = format == :mp4 ? "mp4" : "gif"
-        filename = "wavefield_$(field).$(ext)"
-    end
-
-    # 色标
-    if clim === nothing
-        vmax = _pctl(abs.(data), 99)
-        vmax = vmax == 0 ? 1.0f0 : vmax
-        clim = (-vmax, vmax)
-    end
-
-    # 生成动画
-    anim = Main.Plots.Animation()
-    for i in 1:nframes
-        Main.Plots.heatmap(data[:, :, i]'; c=colormap, clim=clim, yflip=true,
-            title="$field - Frame $i/$nframes", aspect_ratio=:equal,
-            size=(600, 500))
-        Main.Plots.frame(anim)
-    end
-
-    # 保存
-    if format == :mp4
-        Main.Plots.mp4(anim, filename; fps=fps)
+    ext = format == :gif ? "gif" : "mp4"
+    filepath = if filename === nothing
+        resolve_output_path(outputs, :videos, default_video_filename(field; ext=ext))
     else
-        Main.Plots.gif(anim, filename; fps=fps)
+        isabspath(filename) ? filename : resolve_output_path(outputs, :videos, filename)
     end
 
-    @info "Video created" file = filename format = format frames = nframes fps = fps
-    return filename
+    generate_video(data, filepath; field_name=field, fps=fps, colormap=colormap, clim=clim)
+    return filepath
 end
 
 # ==============================================================================
@@ -542,7 +430,7 @@ function _prepare_model(model::VelocityModel, bc::Boundary)
     vp[n+1:end, :] = model.vp
     vs = zeros(Float32, nz_new, model.nx)
     vs[n+1:end, :] = model.vs
-    rho = fill(1f-10, nz_new, model.nx)
+    rho = zeros(Float32, nz_new, model.nx)
     rho[n+1:end, :] = model.rho
 
     VelocityModel(vp, vs, rho, model.dx, model.dz; name=model.name * "_vac"), Float32(n * model.dz)
@@ -623,7 +511,7 @@ export SimResult, times, trace, n_receivers
 export simulate
 
 # IO
-export save_result, load_result, save_gather, load_gather
+export save_result, load_result, load_gather
 
 # Plotting
 export plot_gather, plot_trace, plot_snapshot, plot_model

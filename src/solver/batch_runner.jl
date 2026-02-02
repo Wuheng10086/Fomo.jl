@@ -100,7 +100,7 @@ function BatchSimulator(
 )
     # Auto-select backend
     be = be === nothing ? (is_cuda_available() ? backend(:cuda) : backend(:cpu)) : be
-    
+
     # Compute dt
     vp_max = maximum(model.vp)
     dt = Float32(cfl * min(model.dx, model.dz) / vp_max)
@@ -200,7 +200,9 @@ function simulate_shot!(sim::BatchSimulator, src_x::Real, src_z::Real;
         progress=false, on_step=nothing)
 
     # Return gather (copy to CPU)
-    return _get_gather_from_batch(sim.backend, sim.receivers)
+    g = _get_gather_from_batch(sim.backend, sim.receivers)
+    any(.!isfinite.(g)) && error("检测到非有限值 (NaN/Inf) 出现在采集数据中，可能是数值不稳定或边界设置问题。请检查模型与边界/时间步长。")
+    return g
 end
 
 _get_gather_from_batch(::CPUBackend, rec::Receivers) = copy(rec.data)
@@ -280,7 +282,9 @@ function simulate_shots!(sim::BatchSimulator,
             progress=false, on_step=nothing)
 
         # Copy gather
-        gathers[i] = _get_gather_from_batch(sim.backend, sim.receivers)
+        g = _get_gather_from_batch(sim.backend, sim.receivers)
+        any(.!isfinite.(g)) && error("检测到非有限值 (NaN/Inf) 出现在采集数据中，可能是数值不稳定或边界设置问题。请检查模型与边界/时间步长。")
+        gathers[i] = g
 
         # Callback
         if on_shot_complete !== nothing

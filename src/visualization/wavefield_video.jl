@@ -329,6 +329,57 @@ function generate_video(recorder::FieldRecorder, output::String;
     return output
 end
 
+function generate_video(frames::Array{Float32,3}, output::String;
+    field_name::Symbol=:vz,
+    fps::Int=30, colormap::Symbol=:seismic,
+    clim::Union{Nothing,Tuple{Float64,Float64}}=nothing,
+    percentile::Float64=99.5,
+    times=nothing)
+    nx_ds, nz_ds, n_frames = size(frames)
+    n_frames == 0 && return nothing
+
+    clim_val = if clim === nothing
+        _compute_clim(frames, field_name, percentile)
+    else
+        max(abs(clim[1]), abs(clim[2]))
+    end
+
+    fig = Figure(size=(1000, 600))
+    data = Observable(frames[:, :, 1])
+    time_text = Observable("t = 0.000 s")
+
+    ax = Axis(fig[1, 1],
+        title=time_text,
+        xlabel="X (grid)",
+        ylabel="Z (grid)",
+        aspect=DataAspect())
+
+    crange = if field_name == :vel
+        (0, clim_val)
+    else
+        (-clim_val, clim_val)
+    end
+
+    hm = heatmap!(ax, 1:nx_ds, 1:nz_ds, data,
+        colormap=colormap,
+        colorrange=crange)
+    ax.yreversed = true
+    Colorbar(fig[1, 2], hm, label=string(field_name))
+
+    mkpath(dirname(output))
+    record(fig, output, 1:n_frames; framerate=fps) do i
+        data[] = frames[:, :, i]
+        if times === nothing
+            time_text[] = @sprintf("frame %d/%d", i, n_frames)
+        else
+            time_text[] = @sprintf("t = %.4f s", times[i])
+        end
+    end
+
+    @info "Video saved" path = output
+    return output
+end
+
 """
 Compute color limit from frames using percentile to ignore outliers.
 """
@@ -373,6 +424,34 @@ function _compute_clim(frames::Vector{Matrix{Float32}}, field_name::Symbol, perc
         clim_val = 1.0f0
     end
 
+    return clim_val
+end
+
+function _compute_clim(frames::Array{Float32,3}, field_name::Symbol, percentile::Float64)
+    all_abs = Float32[]
+    n_frames = size(frames, 3)
+    sample_indices = if n_frames <= 50
+        1:n_frames
+    else
+        round.(Int, range(1, n_frames, length=50))
+    end
+
+    for i in sample_indices
+        frame = frames[:, :, i]
+        valid = filter(isfinite, vec(frame))
+        append!(all_abs, abs.(valid))
+    end
+
+    if isempty(all_abs)
+        @warn "No valid data in frames, using default clim=1.0"
+        return 1.0f0
+    end
+
+    sort!(all_abs)
+    idx = min(length(all_abs), ceil(Int, percentile / 100 * length(all_abs)))
+    clim_val = all_abs[idx]
+    clim_val = field_name == :vel ? clim_val * 1.2 : clim_val * 1.5
+    (clim_val <= 0 || !isfinite(clim_val)) && (clim_val = 1.0f0)
     return clim_val
 end
 

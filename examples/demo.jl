@@ -12,6 +12,7 @@
 
 using ElasticWave2D
 using ElasticWave2D.API
+using ElasticWave2D: OutputConfig, resolve_output_path, ensure_output_dirs
 
 # -----------------------------------------------------------------------------
 # Demo 1: 基础双层模型
@@ -37,10 +38,14 @@ function demo_basic()
         model,
         SourceConfig(1000.0, 30.0; f0=20.0),
         line_receivers(100, 1900, 91);
-        config = SimConfig(nt=1500, boundary=FreeSurface())
+        config=SimConfig(nt=1500, boundary=FreeSurface()),
+        outputs=OutputConfig(base_dir="outputs/demo_basic")
     )
 
     println("✓ 完成! Gather size: $(size(result.gather))")
+    outputs = OutputConfig(base_dir=result.output_dir)
+    save_result(result, resolve_output_path(outputs, :results, "result.jld2"))
+    ElasticWave2D.API.plot_gather(result; title="Demo Basic - Two Layer", output=resolve_output_path(outputs, :figures, "gather.png"))
     return result
 end
 
@@ -63,10 +68,14 @@ function demo_vacuum()
         model,
         SourceConfig(1000.0, 50.0, Ricker(15.0), ForceZ),
         line_receivers(100, 1900, 91);
-        config = SimConfig(nt=2000, boundary=Vacuum(10))
+        config=SimConfig(nt=2000, boundary=Vacuum(10)),
+        outputs=OutputConfig(base_dir="outputs/demo_vacuum")
     )
 
     println("✓ 完成! Gather size: $(size(result.gather))")
+    outputs = OutputConfig(base_dir=result.output_dir)
+    save_result(result, resolve_output_path(outputs, :results, "result.jld2"))
+    ElasticWave2D.API.plot_gather(result; title="Demo Vacuum - Free Surface", output=resolve_output_path(outputs, :figures, "gather.png"))
     return result
 end
 
@@ -94,10 +103,14 @@ function demo_tunnel()
         model,
         SourceConfig(250.0, 10.0; f0=60.0),
         line_receivers(50, 950, 91);
-        config = SimConfig(nt=1500, boundary=Vacuum(10))
+        config=SimConfig(nt=1500, boundary=Vacuum(10)),
+        outputs=OutputConfig(base_dir="outputs/demo_tunnel")
     )
 
     println("✓ 完成! 观察绕射波和阴影区")
+    outputs = OutputConfig(base_dir=result.output_dir)
+    save_result(result, resolve_output_path(outputs, :results, "result.jld2"))
+    ElasticWave2D.API.plot_gather(result; title="Demo Tunnel - Cavity Detection", output=resolve_output_path(outputs, :figures, "gather.png"))
     return result
 end
 
@@ -131,6 +144,12 @@ function demo_batch()
     t = @elapsed gathers = simulate_shots!(sim, src_x, src_z; verbose=true)
 
     println("✓ 完成! 总耗时: $(round(t, digits=2))s, 平均: $(round(t/length(src_x), digits=3))s/炮")
+    for (i, g) in enumerate(gathers)
+        outputs = OutputConfig(base_dir=joinpath("outputs", "demo_batch", "shot_$(i)"))
+        ensure_output_dirs(outputs)
+        ElasticWave2D.API.save_gather(g, sim.params.dt, resolve_output_path(outputs, :results, "gather.jld2"))
+        ElasticWave2D.API.plot_gather(g, sim.params.dt; title="Demo Batch - Shot $i", output=resolve_output_path(outputs, :figures, "gather.png"))
+    end
     return gathers
 end
 
@@ -153,11 +172,15 @@ function demo_video()
         model,
         SourceConfig(1000.0, 50.0; f0=15.0),
         line_receivers(100, 1900, 91);
-        config = SimConfig(nt=1000, boundary=FreeSurface(), output_dir="outputs"),
-        video = Video(fields=[:vz], interval=10, fps=30, format=:gif)
+        config=SimConfig(nt=1000, boundary=FreeSurface()),
+        outputs=OutputConfig(base_dir="outputs/demo_video"),
+        video=Video(fields=[:vz], interval=10, fps=30, format=:mp4)
     )
 
-    println("✓ 完成! 视频保存到 outputs/")
+    println("✓ 完成! 视频保存到 $(result.output_dir)")
+    outputs = OutputConfig(base_dir=result.output_dir)
+    save_result(result, resolve_output_path(outputs, :results, "result.jld2"))
+    ElasticWave2D.API.plot_gather(result; title="Demo Video - Wavefield Recording", output=resolve_output_path(outputs, :figures, "gather.png"))
     return result
 end
 
@@ -166,15 +189,15 @@ end
 # -----------------------------------------------------------------------------
 function main()
     demos = Dict(
-        "basic"  => demo_basic,
+        "basic" => demo_basic,
         "vacuum" => demo_vacuum,
         "tunnel" => demo_tunnel,
-        "batch"  => demo_batch,
-        "video"  => demo_video,
+        "batch" => demo_batch,
+        "video" => demo_video,
     )
 
     if length(ARGS) == 0
-        # 运行所有 (除了 video，因为需要 Plots)
+        # 运行所有
         demo_basic()
         demo_vacuum()
         demo_tunnel()

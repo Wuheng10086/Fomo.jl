@@ -95,6 +95,7 @@ export inject_source!, record_receivers!, reset!
 # --- Solver ---
 export TimeStepInfo
 export time_step!, run_time_loop!, run_time_loop_with_boundaries!
+export compose_on_step
 export BatchSimulator, simulate_shot!, simulate_shots!, benchmark_shots
 
 # --- Visualization ---
@@ -109,6 +110,14 @@ export convert_model, model_info, resample_model, suggest_grid_spacing
 export SurveyGeometry, MultiShotGeometry
 export create_geometry, save_geometry, load_geometry
 
+# --- Outputs ---
+export OutputConfig, ArtifactsManifest
+export results_dir, videos_dir, figures_dir, logs_dir
+export ensure_output_dirs, resolve_output_path
+export default_result_filename, default_video_filename
+export record_artifact!, get_artifact
+export write_manifest
+
 # ==============================================================================
 # Include Files
 # ==============================================================================
@@ -120,6 +129,9 @@ include("compute/backend_types.jl")
 include("core/simulation_types.jl")
 include("core/velocity_model.jl")
 include("core/boundary_configuration.jl")
+
+# 2.5 Domain (User-facing types)
+include("domain/api_types.jl")
 
 # 3. Physics (Numerical Kernels)
 include("physics/wave_propagation/velocity_kernel.jl")
@@ -140,6 +152,7 @@ include("initialization/surface_generator.jl")
 
 # 6. Solver (Orchestration)
 include("solver/time_stepper.jl")
+include("solver/observers.jl")
 include("solver/shot_manager.jl")
 include("solver/parallel_executor.jl")
 include("solver/batch_runner.jl")
@@ -148,7 +161,10 @@ include("solver/batch_runner.jl")
 include("io/model_io.jl")
 include("io/seismic_data_io.jl")
 include("io/geometry_io.jl")
-include("io/output_manager.jl")
+
+# 7.5 Outputs (directory structure & artifacts)
+include("outputs/paths.jl")
+include("outputs/artifacts.jl")
 
 # 8. High-level API (recommended for most users)
 include("api/API.jl")

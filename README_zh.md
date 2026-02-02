@@ -18,7 +18,6 @@
 - ✅ **一行安装** —— 纯 Julia，无需编译
 - ✅ **支持 GPU** —— GTX 1060、RTX 3060 等消费级显卡
 - ✅ **CPU 多线程** —— `julia -t auto` 自动并行
-- ✅ **代码清晰** —— 便于学习和修改
 - ✅ **边界条件** —— HABC、镜像法、真空层
 
 ## 特性
@@ -43,10 +42,39 @@ Pkg.add(url="https://github.com/Wuheng10086/ElasticWave2D.jl")
 
 **环境要求**：Julia 1.9+，GPU 可选（自动检测 CUDA）。
 
+### 本地开发（clone 仓库后直接用）
+在仓库根目录运行（关键是 `--project=.` 激活本地环境）：
+
+```bash
+julia --project=. -e 'import Pkg; Pkg.instantiate(); using ElasticWave2D; println(1)'
+```
+
+如果想在任意目录里直接 `using ElasticWave2D`，把本地路径注册到你的环境：
+
+```julia
+import Pkg
+Pkg.develop(path="E:/dev/ElasticWave2D.jl")
+```
+
+### 运行模式与可选依赖
+- CPU 模式：无 GPU 亦可运行，建议 `julia -t auto` 开启多线程。
+- GPU 模式：安装 CUDA.jl 且设备可用（自动检测）。
+- 可选数据格式依赖（按需安装）：`SegyIO`（SEG-Y）、`MAT`（.mat）、`NPZ`（.npy）。不在主依赖中，需要时自行：
+  ```julia
+  using Pkg
+  Pkg.add(["SegyIO","MAT","NPZ"])  # 任选其一或多个
+  ```
+  读取示例（SEG-Y）：
+  ```julia
+  using SegyIO
+  # segy = SegyIO.SegyFile("path.segy")
+  ```
+
 ## 快速开始
 
 ```julia
 using ElasticWave2D.API
+using ElasticWave2D: OutputConfig, resolve_output_path
 
 # 创建一个简单的双层模型
 nx, nz = 200, 100
@@ -59,18 +87,25 @@ vp[50:end, :] .= 3500.0f0  # 下层速度更快
 
 model = VelocityModel(vp, vs, rho, dx, dx)
 
+# 建议：每次运行使用一个独立输出目录（扁平布局，所有产物直接写在该目录下）
+outputs = OutputConfig(base_dir="outputs/quickstart")
+
 # 运行模拟
 result = simulate(
     model,
     SourceConfig(1000.0, 20.0; f0=20.0),           # 震源位于 (1000m, 20m深度)
     line_receivers(100.0, 1900.0, 181; z=10.0);    # 181 个检波器
-    config = SimConfig(nt=1000, boundary=Vacuum(10))
+    config = SimConfig(nt=1000, boundary=Vacuum(10)),
+    outputs = outputs
 )
 
 # 获取结果
 println("道集大小: ", size(result.gather))
-plot_gather(result)
+plot_gather(result; output=resolve_output_path(outputs, :figures, "gather.png"))
+save_result(result, resolve_output_path(outputs, :results, "result.jld2"))
 ```
+
+更完整的输出组织与示例用法见 [USAGE_zh.md](docs/USAGE_zh.md)。
 
 ## 示例
 
@@ -87,6 +122,7 @@ result = simulate(
     SourceConfig(2000.0, 50.0, Ricker(15.0)),
     line_receivers(100, 3900, 191);
     config = SimConfig(nt=3000, boundary=FreeSurface()),
+    outputs = OutputConfig(base_dir="outputs/elastic_wave_demo"),
     video = Video(fields=[:vz], interval=20, fps=30)
 )
 ```
@@ -102,6 +138,8 @@ result = simulate(
 用地震绕射波探测地下空腔，真空层处理自由表面和隧道。
 
 ```julia
+using ElasticWave2D: OutputConfig
+
 # 创建带隧道的模型（ρ=0 表示空腔）
 rho[40:45, 95:105] .= 0.0f0  # 隧道空腔
 
@@ -109,7 +147,8 @@ result = simulate(
     model,
     SourceConfig(500.0, 10.0; f0=50.0),
     line_receivers(100, 900, 81);
-    config = SimConfig(nt=2000, boundary=Vacuum(10))
+    config = SimConfig(nt=2000, boundary=Vacuum(10)),
+    outputs = OutputConfig(base_dir="outputs/tunnel_demo")
 )
 ```
 
@@ -155,7 +194,7 @@ end
   <img src="docs/images/vacuum_gather.png" width="400" alt="真空层">
 </p>
 <p align="center">
-  <i>左：镜像法 | 右：真空层公式 —— 结果几乎一致</i>
+  <i>左：镜像法 | 右：真空层公式</i>
 </p>
 
 ## API 参考
@@ -190,7 +229,7 @@ SimConfig(
     cfl = 0.4,           # CFL 数
     fd_order = 8,        # 差分精度 (2,4,6,8,10)
     boundary = Vacuum(10),
-    output_dir = "outputs"
+    output_dir = "outputs"  # 兼容字段：建议改用 outputs=OutputConfig(base_dir=...) 管理输出目录
 )
 
 # 视频
@@ -217,8 +256,10 @@ gathers = simulate_shots!(sim, src_x_vec, src_z_vec)
 save_result(result, "shot_001.jld2")
 result = load_result("shot_001.jld2")
 
-# 绑图（需要 Plots.jl）
+# 绘图
 plot_gather(result)
+
+# 下列函数需要 Plots.jl：先 `using Plots`
 plot_trace(result, 50)
 ```
 
@@ -265,12 +306,14 @@ result = benchmark_shots(model, rec_x, rec_z, src_x, src_z; nt=3000, f0=15.0)
 ElasticWave2D.jl/
 ├── src/
 │   ├── api/                # 高层 API（推荐用这个）
+│   ├── domain/             # 用户层类型（wavelet/source/receiver/boundary/config/result）
 │   ├── compute/            # CPU/GPU 抽象
 │   ├── core/               # 基础类型
 │   ├── physics/            # 计算核心
 │   ├── initialization/     # 初始化
 │   ├── solver/             # 时间步进、批量计算
 │   ├── io/                 # 读写
+│   ├── outputs/            # 输出路径与产物清单（扁平输出）
 │   └── visualization/      # 画图、视频
 ├── examples/               # 示例
 ├── test/                   # 测试

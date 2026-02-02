@@ -22,7 +22,7 @@ mutable struct Wavefield{T<:AbstractMatrix{Float32}}
     txx::T
     tzz::T
     txz::T
-    
+
     # Previous time step (for HABC)
     vx_old::T
     vz_old::T
@@ -78,12 +78,12 @@ struct Medium{T<:AbstractMatrix{Float32}}
     M::Int              # FD half-stencil width
     pad::Int            # Boundary padding
     is_free_surface::Bool
-    
+
     # Original material properties
     lam::T              # Lambda (Lamé's first parameter)
     mu_txx::T           # Mu at txx/tzz positions
     mu_txz::T           # Mu at txz positions (harmonic average)
-    
+
     # OPTIMIZED: Precomputed values to eliminate divisions in hot loops
     buoy_vx::T          # 1/rho at vx positions (buoyancy)
     buoy_vz::T          # 1/rho at vz positions (buoyancy)
@@ -106,7 +106,7 @@ struct HABCConfig{T<:AbstractMatrix{Float32}}
     qt_x::Float32
     qt_z::Float32
     qxt::Float32
-    
+
     w_vx::T
     w_vz::T
     w_tau::T
@@ -123,13 +123,13 @@ abstract type AbstractSource end
 
 Single source configuration.
 """
-struct Source{V<:AbstractVector{Float32}, I<:Integer} <: AbstractSource
+struct Source{V<:AbstractVector{Float32},I<:Integer} <: AbstractSource
     i::I                # X grid index
     j::I                # Z grid index
     wavelet::V          # Source time function
 end
 
-struct StressSource{V<:AbstractVector{Float32}, I<:Integer} <: AbstractSource
+struct StressSource{V<:AbstractVector{Float32},I<:Integer} <: AbstractSource
     i::I
     j::I
     wavelet::V
@@ -155,7 +155,7 @@ Physics: ρ ∂v/∂t = ∇·σ + f  →  v += dt * f(t) / ρ = dt * f(t) * buoy
 src = ForceSource(src_i, src_j, wavelet, :vz, 1.0f0 / rho_at_src)
 ```
 """
-struct ForceSource{V<:AbstractVector{Float32}, I<:Integer} <: AbstractSource
+struct ForceSource{V<:AbstractVector{Float32},I<:Integer} <: AbstractSource
     i::I
     j::I
     wavelet::V
@@ -168,7 +168,7 @@ end
 
 Receiver configuration and data buffer.
 """
-struct Receivers{T<:AbstractMatrix{Float32}, I<:AbstractVector{<:Integer}}
+struct Receivers{T<:AbstractMatrix{Float32},I<:AbstractVector{<:Integer}}
     i::I                    # X indices
     j::I                    # Z indices
     data::T                 # [nt × n_rec]
@@ -195,7 +195,7 @@ end
 
 function SimParams(dt, nt, dx, dz, fd_order)
     M = fd_order ÷ 2
-    SimParams(Float32(dt), nt, Float32(dt/dx), Float32(dt/dz), fd_order, M)
+    SimParams(Float32(dt), nt, Float32(dt / dx), Float32(dt / dz), fd_order, M)
 end
 
 # ==============================================================================
@@ -226,11 +226,11 @@ println("Shot ID: ", result.shot_id)
 struct ShotResult
     gather::Matrix{Float32}   # [nt × n_rec] - always on CPU
     shot_id::Int
-    
+
     # Source position (grid indices)
     src_i::Int
     src_j::Int
-    
+
     # Receiver positions (grid indices)
     rec_i::Vector{Int}
     rec_j::Vector{Int}
