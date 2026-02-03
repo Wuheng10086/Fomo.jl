@@ -13,7 +13,7 @@ using ..ElasticWave2D: VelocityModel, Wavefield, Medium, SimParams,
     CUDA_AVAILABLE, CPU_BACKEND, CUDA_BACKEND,
     AbstractBackend, CUDABackend, BoundaryConfig,
     OutputConfig, ensure_output_dirs, resolve_output_path, default_video_filename, default_result_filename,
-    generate_video, ArtifactsManifest, record_artifact!, write_manifest
+    generate_video, plot_setup, ArtifactsManifest, record_artifact!, write_manifest
 
 using Printf
 using JLD2
@@ -189,6 +189,11 @@ function simulate(
     be = CUDA_AVAILABLE[] ? CUDA_BACKEND : CPU_BACKEND
     outputs = outputs === nothing ? OutputConfig(base_dir=config.output_dir) : outputs
     ensure_output_dirs(outputs)
+
+    if outputs.plot_setup
+        plot_setup(model, [source.x], [source.z], receivers.x, receivers.z;
+            output=joinpath(outputs.base_dir, "setup.png"))
+    end
     if video !== nothing && video.output_dir !== nothing
         Base.depwarn("Video(output_dir=...) is deprecated; use outputs=OutputConfig(base_dir=...) with fixed videos/ directory.", :simulate)
     end
@@ -262,7 +267,8 @@ end
 
 function plot_gather(gather::Matrix, dt::Real;
     cmap=:seismic, clim=nothing, title="Seismic Gather",
-    xlabel="Trace", ylabel="Time (s)", output=nothing)
+    xlabel="Trace", ylabel="Time (s)", output=nothing,
+    aspect=nothing)
 
     any(.!isfinite.(gather)) && error("采集数据包含 NaN/Inf，已停止绘图。")
     nt, nrec = size(gather)
@@ -270,16 +276,25 @@ function plot_gather(gather::Matrix, dt::Real;
 
     if clim === nothing
         vmax = _pctl(abs.(gather), 99)
-        vmax = vmax == 0 ? 1.0f0 : vmax
+        vmax = vmax == 0 ? 1.0f0 : Float32(vmax)
         clim = (-vmax, vmax)
     end
 
-    fig = Figure(size=(1000, 600), fontsize=14)
-    ax = Axis(fig[1, 1], xlabel=xlabel, ylabel=ylabel, title=title, yreversed=true)
-    hm = heatmap!(ax, 1:nrec, t, gather'; colormap=cmap, colorrange=clim)
-    Colorbar(fig[1, 2], hm, label="Amplitude")
+    fig = Figure(size=(800, 600), fontsize=16)
+    ax = Axis(fig[1, 1], 
+        xlabel=xlabel, ylabel=ylabel, 
+        title=title, yreversed=true,
+        xlabelsize=18, ylabelsize=18,
+        xtickalign=1, ytickalign=1,
+        xminorticksvisible=true, yminorticksvisible=true,
+        aspect=aspect)
 
-    output !== nothing && save(output, fig)
+    hm = heatmap!(ax, 1:nrec, t, gather'; colormap=cmap, colorrange=clim)
+    Colorbar(fig[1, 2], hm, label="Amplitude", labelsize=18, ticklabelsize=14, width=15)
+
+    if output !== nothing
+        save(output, fig, px_per_unit=2)
+    end
     return fig
 end
 

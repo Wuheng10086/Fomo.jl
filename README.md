@@ -73,8 +73,7 @@ Pkg.develop(path="E:/dev/ElasticWave2D.jl")
 ## Quick Start
 
 ```julia
-using ElasticWave2D.API
-using ElasticWave2D: OutputConfig, resolve_output_path
+using ElasticWave2D
 
 # Create a simple two-layer model
 nx, nz = 200, 100
@@ -87,22 +86,64 @@ vp[50:end, :] .= 3500.0f0  # Faster layer below
 
 model = VelocityModel(vp, vs, rho, dx, dx)
 
-# Recommended: use an isolated output directory per run (flat layout)
-outputs = OutputConfig(base_dir="outputs/quickstart")
+# Output settings (all artifacts written into this directory)
+outputs = OutputConfig(base_dir="outputs/quickstart", plot_gather=true, video_config=nothing)
+boundary = top_vacuum(10)  # or top_image(), top_absorbing()
+simconf = SimConfig(nt=1000, cfl=0.4, fd_order=8, dt=nothing)
 
 # Run simulation
-result = simulate(
+gather = simulate(
     model,
     SourceConfig(1000.0, 20.0; f0=20.0),           # Source at (1000m, 20m depth)
-    line_receivers(100.0, 1900.0, 181; z=10.0);    # 181 receivers
-    config = SimConfig(nt=1000, boundary=Vacuum(10)),
-    outputs = outputs
+    line_receivers(100.0, 1900.0, 181; z=10.0),    # 181 receivers
+    boundary,
+    outputs,
+    simconf
 )
 
-# Access results
-println("Gather size: ", size(result.gather))
-plot_gather(result; output=resolve_output_path(outputs, :figures, "gather.png"))
-save_result(result, resolve_output_path(outputs, :results, "result.jld2"))
+println("Gather size: ", size(gather))
+# Files created:
+# - outputs/quickstart/result.jld2
+# - outputs/quickstart/gather.png (if plot_gather=true)
+```
+
+## Batch Shots (Multi-Shot Simulation)
+
+For efficient multi-shot surveys, use `BatchSimulator` to pre-allocate resources once:
+
+```julia
+using ElasticWave2D
+
+# Setup model (same as single shot)
+model = VelocityModel(vp, vs, rho, dx, dx)
+
+# Create batch simulator (allocates GPU/CPU resources once)
+src_template = SourceConfig(0.0, 0.0; f0=20.0)  # position will be overridden
+receivers = line_receivers(100.0, 1900.0, 181; z=10.0)
+boundary = top_image(nbc=50)
+simconf = SimConfig(nt=2000)
+
+sim = BatchSimulator(model, src_template, receivers, boundary, simconf)
+
+# Define shot positions
+src_x = Float32.(500:200:2500)  # 11 shots
+src_z = fill(20.0f0, length(src_x))
+
+# Run all shots (store results in memory)
+gathers = simulate_shots!(sim, src_x, src_z)
+
+# Or with output files and callback
+outputs = OutputConfig(base_dir="outputs/batch", plot_gather=true, plot_setup=true)
+simulate_shots!(sim, src_x, src_z; store=false, outputs=outputs) do gather, i
+    @info "Shot $i completed" size=size(gather)
+end
+```
+
+For single shots with a pre-allocated simulator:
+
+```julia
+gather1 = simulate_shot!(sim, 500.0f0, 20.0f0)
+gather2 = simulate_shot!(sim, 600.0f0, 20.0f0; progress=true)
 ```
 
 ## Examples
@@ -111,17 +152,23 @@ save_result(result, resolve_output_path(outputs, :results, "result.jld2"))
 High-resolution wave propagation in a two-layer medium with video output.
 
 ```julia
-using ElasticWave2D.API
+using ElasticWave2D
 
 model = VelocityModel(vp, vs, rho, 10.0f0, 10.0f0)
 
-result = simulate(
+outputs = OutputConfig(
+    base_dir="outputs/elastic_wave_demo",
+    plot_gather=true,
+    video_config=VideoConfig(fields=[:vz], skip=20, fps=30),
+)
+
+gather = simulate(
     model,
     SourceConfig(2000.0, 50.0, Ricker(15.0)),
-    line_receivers(100, 3900, 191);
-    config = SimConfig(nt=3000, boundary=FreeSurface()),
-    outputs = OutputConfig(base_dir="outputs/elastic_wave_demo"),
-    video = Video(fields=[:vz], interval=20, fps=30)
+    line_receivers(100, 3900, 191),
+    top_image(),
+    outputs,
+    SimConfig(nt=3000)
 )
 ```
 
@@ -136,17 +183,26 @@ result = simulate(
 Detect underground cavities using seismic diffraction. Uses vacuum formulation for both free surface and tunnel cavity.
 
 ```julia
-using ElasticWave2D: OutputConfig
+using ElasticWave2D
 
 # Create model with tunnel (set ρ=0 for void)
+nx, nz, dx = 200, 100, 5.0f0
+vp = fill(2000.0f0, nz, nx)
+vs = fill(1200.0f0, nz, nx)
+rho = fill(2000.0f0, nz, nx)
 rho[40:45, 95:105] .= 0.0f0  # Tunnel cavity
+vp[40:45, 95:105] .= 0.0f0
+vs[40:45, 95:105] .= 0.0f0
 
-result = simulate(
+model = VelocityModel(vp, vs, rho, dx, dx)
+
+gather = simulate(
     model,
-    SourceConfig(500.0, 10.0; f0=50.0),
-    line_receivers(100, 900, 81);
-    config = SimConfig(nt=2000, boundary=Vacuum(10)),
-    outputs = OutputConfig(base_dir="outputs/tunnel_demo")
+    SourceConfig(250.0, 10.0; f0=60.0),
+    line_receivers(50.0, 950.0, 200; z=10.0),
+    top_vacuum(10),
+    OutputConfig(base_dir="outputs/tunnel_demo", plot_gather=true),
+    SimConfig(nt=1500)
 )
 ```
 
@@ -175,17 +231,15 @@ Image an anticlinal structure — a classic hydrocarbon trap.
 
 | Method | Surface Waves | Use Case |
 |--------|--------------|----------|
-| `Absorbing()` | ❌ | Body waves only |
-| `FreeSurface()` | ✅ | Accurate flat surface (Image Method) |
-| `Vacuum(n)` | ✅ | Topography, cavities (recommended) |
+| `top_absorbing()` | ❌ | Body waves only |
+| `top_image()` | ✅ | Accurate flat surface (Image Method) |
+| `top_vacuum(n)` | ✅ | Topography, cavities (recommended) |
 
 ```julia
 # Compare different boundaries
-for boundary in [Absorbing(), FreeSurface(), Vacuum(10)]
-    outputs = OutputConfig(base_dir="outputs/boundary_$(boundary.top)")
-    result = simulate(model, source, receivers;
-        config = SimConfig(nt=2000, boundary=boundary),
-        outputs = outputs)
+outputs = OutputConfig(base_dir="outputs/boundary_compare", plot_gather=false, video_config=nothing)
+for boundary in [top_absorbing(), top_image(), top_vacuum(10)]
+    simulate(model, source, receivers, boundary, outputs, SimConfig(nt=2000); progress=false)
 end
 ```
 
@@ -222,59 +276,42 @@ ReceiverConfig(x_vec, z_vec)                   # Custom positions
 ReceiverConfig(x_vec, z_vec, Vx)              # Record Vx instead of Vz
 
 # Boundary
-FreeSurface()      # Image Method (flat surface)
-Absorbing()        # HABC on all sides
-Vacuum(n)          # n vacuum layers at top (recommended)
+top_image()        # Image Method (flat surface)
+top_absorbing()    # Absorbing at top
+top_vacuum(n)      # n vacuum layers at top (recommended)
 
 # Configuration
-SimConfig(
-    nt = 3000,           # Time steps
-    dt = nothing,        # Auto-compute from CFL
-    cfl = 0.4,           # CFL number
-    fd_order = 8,        # FD accuracy (2,4,6,8,10)
-    boundary = Vacuum(10),
-    output_dir = "outputs"  # Legacy: prefer outputs=OutputConfig(base_dir=...) for output paths
-)
+simconf = SimConfig(nt=3000, dt=nothing, cfl=0.4, fd_order=8)
 
 # Video
-Video(
-    fields = [:vz],      # Fields to record
-    interval = 50,       # Save every N steps
-    fps = 20,
-    format = :mp4        # :mp4 or :gif
-)
+video_config = VideoConfig(fields=[:vz], skip=50, fps=20)
 ```
 
 ### Main Functions
 
 ```julia
-# Run simulation
-result = simulate(model, source, receivers; config, video=nothing)
+# Single-shot simulation (6 positional arguments)
+gather = simulate(model, source, receivers, boundary, outputs, simconf)
 
-# Batch simulation (high performance)
-using ElasticWave2D
-sim = BatchSimulator(model, rec_x, rec_z; nt=3000, f0=15.0)
-gathers = simulate_shots!(sim, src_x_vec, src_z_vec)
-
-# I/O
-save_result(result, "shot_001.jld2")
-result = load_result("shot_001.jld2")
-
-# Plotting
-plot_gather(result)
-
-# Requires `using Plots`
-plot_trace(result, 50)
+# Batch simulation (efficient multi-shot)
+sim = BatchSimulator(model, src_template, receivers, boundary, simconf)
+gather = simulate_shot!(sim, src_x, src_z)                    # Single shot
+gathers = simulate_shots!(sim, src_x_vec, src_z_vec)          # Multiple shots
+simulate_shots!(sim, src_x_vec, src_z_vec; store=false) do gather, i
+    # Process each shot with callback
+end
 ```
 
-### Result Structure
+### Output Files
 
-```julia
-result.gather      # [nt × n_receivers] seismogram
-result.dt          # Time step used
-result.nt          # Number of time steps
-result.snapshots   # Dict of wavefield snapshots (if video enabled)
-```
+When using `OutputConfig(base_dir="outputs/shot1", plot_gather=true, video_config=video_config)`:
+
+| File | Description |
+|------|-------------|
+| `result.jld2` | Simulation result (gather, source, receivers) |
+| `gather.png` | Seismic gather plot (if `plot_gather=true`) |
+| `setup.png` | Model + sources + receivers (if `plot_setup=true`) |
+| `wavefield_*.mp4` | Wavefield animation (if `video_config!=nothing`) |
 
 ## Performance
 
@@ -287,15 +324,6 @@ result.snapshots   # Dict of wavefield snapshots (if video enabled)
 | 1200×600 | 8000 | ~3 min |
 
 **CPU** (8-core, with `-t auto`): ~10-20x slower than GPU, but still practical for small-medium models.
-
-### Batch Performance
-
-```julia
-# Benchmark multi-shot performance
-using ElasticWave2D
-result = benchmark_shots(model, rec_x, rec_z, src_x, src_z; nt=3000, f0=15.0)
-# Typical: 0.1-0.3 sec/shot on GPU for medium grids
-```
 
 ## Why I Built This
 
@@ -310,8 +338,8 @@ So I built ElasticWave2D.jl — a simple, Julia-native tool for 2D elastic wave 
 ```
 ElasticWave2D.jl/
 ├── src/
-│   ├── api/                # High-level API (recommended entry point)
-│   ├── domain/             # User-facing types (wavelet/source/receiver/boundary/config/result)
+│   ├── api/                # Single-shot user API (simulate)
+│   ├── domain/             # User-facing basics (wavelet/source/receiver)
 │   ├── compute/            # Hardware abstraction (CPU/GPU)
 │   ├── core/               # Fundamental types (Wavefield, Medium)
 │   ├── physics/            # Numerical kernels (velocity, stress, boundaries)

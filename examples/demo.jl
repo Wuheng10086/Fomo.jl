@@ -11,8 +11,6 @@
 # =============================================================================
 
 using ElasticWave2D
-using ElasticWave2D.API
-using ElasticWave2D: OutputConfig, resolve_output_path, ensure_output_dirs
 
 # -----------------------------------------------------------------------------
 # Demo 1: 基础双层模型
@@ -33,20 +31,18 @@ function demo_basic()
 
     model = VelocityModel(vp, vs, rho, dx, dx)
 
-    # 模拟
-    result = simulate(
-        model,
-        SourceConfig(1000.0, 30.0; f0=20.0),
-        line_receivers(100, 1900, 91);
-        config=SimConfig(nt=1500, boundary=FreeSurface()),
-        outputs=OutputConfig(base_dir="outputs/demo_basic")
-    )
+    source = SourceConfig(1000.0, 30.0; f0=20.0)
+    receivers = line_receivers(100.0, 1900.0, 91; z=10.0)
 
-    println("✓ 完成! Gather size: $(size(result.gather))")
-    outputs = OutputConfig(base_dir=result.output_dir)
-    save_result(result, resolve_output_path(outputs, :results, "result.jld2"))
-    ElasticWave2D.API.plot_gather(result; title="Demo Basic - Two Layer", output=resolve_output_path(outputs, :figures, "gather.png"))
-    return result
+    video_config = VideoConfig(fields=[:vz], skip=10, fps=30)
+    outputs = OutputConfig(base_dir="./outputs/demo_basic", plot_gather=true, plot_setup=true, video_config=video_config)
+    boundary = top_image()
+    simconf = SimConfig(nt=1500, dt=nothing, cfl=0.4, fd_order=8)
+
+    gather = simulate(model, source, receivers, boundary, outputs, simconf; progress=true)
+
+    println("✓ 完成! Gather size: $(size(gather))")
+    return gather
 end
 
 # -----------------------------------------------------------------------------
@@ -64,19 +60,24 @@ function demo_vacuum()
 
     model = VelocityModel(vp, vs, rho, dx, dx)
 
-    result = simulate(
+    source = SourceConfig(1000.0, 50.0, Ricker(15.0), ForceZ)
+    receivers = line_receivers(100.0, 1900.0, 91; z=10.0)
+
+    outputs = OutputConfig(base_dir="./outputs/demo_vacuum", plot_gather=true, plot_setup=true, video_config=nothing)
+    boundary = top_vacuum(10)
+    simconf = SimConfig(nt=2000)
+    gather = simulate(
         model,
-        SourceConfig(1000.0, 50.0, Ricker(15.0), ForceZ),
-        line_receivers(100, 1900, 91);
-        config=SimConfig(nt=2000, boundary=Vacuum(10)),
-        outputs=OutputConfig(base_dir="outputs/demo_vacuum")
+        source,
+        receivers,
+        boundary,
+        outputs,
+        simconf;
+        progress=true
     )
 
-    println("✓ 完成! Gather size: $(size(result.gather))")
-    outputs = OutputConfig(base_dir=result.output_dir)
-    save_result(result, resolve_output_path(outputs, :results, "result.jld2"))
-    ElasticWave2D.API.plot_gather(result; title="Demo Vacuum - Free Surface", output=resolve_output_path(outputs, :figures, "gather.png"))
-    return result
+    println("✓ 完成! Gather size: $(size(gather))")
+    return gather
 end
 
 # -----------------------------------------------------------------------------
@@ -99,19 +100,24 @@ function demo_tunnel()
 
     model = VelocityModel(vp, vs, rho, dx, dx)
 
-    result = simulate(
+    source = SourceConfig(250.0, 10.0; f0=60.0)
+    receivers = line_receivers(50.0, 950.0, 200; z=10.0)
+
+    outputs = OutputConfig(base_dir="./outputs/demo_tunnel", plot_gather=true, video_config=nothing)
+    boundary = top_vacuum(10)
+    simconf = SimConfig(nt=1500)
+    gather = simulate(
         model,
-        SourceConfig(250.0, 10.0; f0=60.0),
-        line_receivers(50, 950, 91);
-        config=SimConfig(nt=1500, boundary=Vacuum(10)),
-        outputs=OutputConfig(base_dir="outputs/demo_tunnel")
+        source,
+        receivers,
+        boundary,
+        outputs,
+        simconf;
+        progress=true
     )
 
     println("✓ 完成! 观察绕射波和阴影区")
-    outputs = OutputConfig(base_dir=result.output_dir)
-    save_result(result, resolve_output_path(outputs, :results, "result.jld2"))
-    ElasticWave2D.API.plot_gather(result; title="Demo Tunnel - Cavity Detection", output=resolve_output_path(outputs, :figures, "gather.png"))
-    return result
+    return gather
 end
 
 # -----------------------------------------------------------------------------
@@ -129,28 +135,23 @@ function demo_batch()
 
     model = VelocityModel(vp, vs, rho, dx, dx)
 
-    # 检波器排列
-    rec_x = Float32.(100:20:2900)
-    rec_z = fill(10.0f0, length(rec_x))
+    receivers = line_receivers(100.0, 2900.0, 141; z=10.0)
 
-    # 创建批量模拟器 (只初始化一次)
-    sim = BatchSimulator(model, rec_x, rec_z; nt=2000, f0=15.0f0)
+    source_template = SourceConfig(0.0, 0.0; f0=15.0)
+    boundary = top_image(nbc=50)
+    simconf = SimConfig(nt=2000)
+    sim = BatchSimulator(model, source_template, receivers, boundary, simconf)
 
     # 10 炮
     src_x = Float32.(500:200:2500)
     src_z = fill(20.0f0, length(src_x))
 
     println("运行 $(length(src_x)) 炮...")
-    t = @elapsed gathers = simulate_shots!(sim, src_x, src_z; verbose=true)
+    outputs = OutputConfig(base_dir="./outputs/demo_batch", plot_gather=false, plot_setup=true, video_config=nothing)
+    t = @elapsed simulate_shots!(sim, src_x, src_z; store=false, outputs=outputs, progress=false)
 
     println("✓ 完成! 总耗时: $(round(t, digits=2))s, 平均: $(round(t/length(src_x), digits=3))s/炮")
-    for (i, g) in enumerate(gathers)
-        outputs = OutputConfig(base_dir=joinpath("outputs", "demo_batch", "shot_$(i)"))
-        ensure_output_dirs(outputs)
-        ElasticWave2D.API.save_gather(g, sim.params.dt, resolve_output_path(outputs, :results, "gather.jld2"))
-        ElasticWave2D.API.plot_gather(g, sim.params.dt; title="Demo Batch - Shot $i", output=resolve_output_path(outputs, :figures, "gather.png"))
-    end
-    return gathers
+    return nothing
 end
 
 # -----------------------------------------------------------------------------
@@ -168,20 +169,28 @@ function demo_video()
 
     model = VelocityModel(vp, vs, rho, dx, dx)
 
-    result = simulate(
+    source = SourceConfig(1000.0, 50.0; f0=15.0)
+    receivers = line_receivers(100.0, 1900.0, 91; z=10.0)
+
+    outputs = OutputConfig(
+        base_dir="./outputs/demo_video",
+        plot_gather=true,
+        video_config=VideoConfig(fields=[:vz], skip=10, fps=30),
+    )
+    boundary = top_image()
+    simconf = SimConfig(nt=1000)
+    gather = simulate(
         model,
-        SourceConfig(1000.0, 50.0; f0=15.0),
-        line_receivers(100, 1900, 91);
-        config=SimConfig(nt=1000, boundary=FreeSurface()),
-        outputs=OutputConfig(base_dir="outputs/demo_video"),
-        video=Video(fields=[:vz], interval=10, fps=30, format=:mp4)
+        source,
+        receivers,
+        boundary,
+        outputs,
+        simconf;
+        progress=true
     )
 
-    println("✓ 完成! 视频保存到 $(result.output_dir)")
-    outputs = OutputConfig(base_dir=result.output_dir)
-    save_result(result, resolve_output_path(outputs, :results, "result.jld2"))
-    ElasticWave2D.API.plot_gather(result; title="Demo Video - Wavefield Recording", output=resolve_output_path(outputs, :figures, "gather.png"))
-    return result
+    println("✓ 完成! 视频保存到 $(outputs.base_dir)")
+    return gather
 end
 
 # -----------------------------------------------------------------------------

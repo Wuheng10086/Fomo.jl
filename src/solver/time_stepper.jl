@@ -48,13 +48,12 @@ function time_step!(backend::AbstractBackend, W::Wavefield, M::Medium, H::HABCCo
     # 3. Velocity update + HABC
     update_velocity!(backend, W, M, a, params)
     apply_habc_velocity!(backend, W, H, M)
+    apply_free_surface_velocity!(backend, W, M)
 
     # 4. Stress update + HABC
     update_stress!(backend, W, M, a, params)
     apply_habc_stress!(backend, W, H, M)
-
-    # 5. Free surface condition (only if enabled)
-    apply_image_method!(backend, W, M)
+    apply_free_surface_stress!(backend, W, M)
 
     # 6. Record receivers
     record_receivers!(backend, W, rec, k)
@@ -69,7 +68,7 @@ Execute a single time step with enhanced boundary configuration handling.
 """
 function time_step_with_boundaries!(backend::AbstractBackend, W::Wavefield, M::Medium, H::HABCConfig,
     a, src::AbstractSource, rec::Receivers, k::Int, params::SimParams,
-    boundary_config::BoundaryConfig)
+    boundary_config::SolverBoundaryConfig)
 
     # 1. Backup boundary (for HABC extrapolation)
     backup_boundary!(backend, W, H, M)
@@ -101,9 +100,12 @@ end
 Apply appropriate boundary conditions to velocity fields based on configuration.
 """
 function apply_boundary_conditions_velocity!(backend::AbstractBackend, W::Wavefield, M::Medium, H::HABCConfig,
-    boundary_config::BoundaryConfig)
+    boundary_config::SolverBoundaryConfig)
     # Apply HABC to boundary strips (except where overridden by other conditions)
     apply_habc_velocity!(backend, W, H, M)
+    if boundary_config.top_boundary == :image
+        apply_free_surface_velocity!(backend, W, M)
+    end
 end
 
 """
@@ -112,13 +114,13 @@ end
 Apply appropriate boundary conditions to stress fields based on configuration.
 """
 function apply_boundary_conditions_stress!(backend::AbstractBackend, W::Wavefield, M::Medium, H::HABCConfig,
-    boundary_config::BoundaryConfig)
+    boundary_config::SolverBoundaryConfig)
     # Apply HABC to boundary strips (except where overridden by other conditions)
     apply_habc_stress!(backend, W, H, M)
 
     # Apply top boundary condition based on configuration
     if boundary_config.top_boundary == :image
-        apply_image_method!(backend, W, M)
+        apply_free_surface_stress!(backend, W, M)
     elseif boundary_config.top_boundary == :vacuum
         # Vacuum boundary condition is handled implicitly in the medium parameters
         # No explicit stress condition needed beyond HABC
@@ -214,7 +216,7 @@ Run the complete time stepping loop with enhanced boundary configuration.
              Return `false` to stop simulation early.
 """
 function run_time_loop_with_boundaries!(backend::AbstractBackend, W::Wavefield, M::Medium, H::HABCConfig,
-    a, src::AbstractSource, rec::Receivers, params::SimParams, boundary_config::BoundaryConfig;
+    a, src::AbstractSource, rec::Receivers, params::SimParams, boundary_config::SolverBoundaryConfig;
     progress::Bool=true, on_step=nothing)
 
     nt = params.nt

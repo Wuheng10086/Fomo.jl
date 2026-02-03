@@ -15,53 +15,46 @@ using CairoMakie: Figure, Axis, heatmap!, Colorbar, DataAspect, Observable, reco
     VideoConfig(; fields, skip, downsample, colormap, fps, show_boundary)
 
 Configuration for wavefield video recording.
+波场视频录制配置。
 
-# Keyword Arguments
-- `fields::Vector{Symbol} = [:vz]`: Wavefield components to record. Options:
-  - `:vx` - Horizontal velocity component
-  - `:vz` - Vertical velocity component (recommended for surface waves)
-  - `:vel` - Velocity magnitude √(vx² + vz²)
-  - `:p` - Pressure field -(τxx + τzz)/2
-  - `:txx` - Normal stress τxx
-  - `:tzz` - Normal stress τzz
-  - `:txz` - Shear stress τxz
-- `skip::Int = 10`: Record every N time steps. Larger = smaller file, fewer frames
-- `downsample::Int = 1`: Spatial downsampling factor. 2 = half resolution
-- `colormap::Symbol = :seismic`: Color scheme for visualization. Options:
-  - `:seismic` - Red-white-blue, good for signed fields (vx, vz, p)
-  - `:inferno` - Yellow-red-black, good for magnitude fields (:vel)
-  - `:viridis` - Green-blue-yellow
-  - Any valid CairoMakie/Makie colormap
-- `fps::Int = 30`: Video frame rate (frames per second)
-- `show_boundary::Bool = true`: Show dashed line marking physical domain boundary
-  (separates interior from absorbing boundary layers)
+# Keyword Arguments / 关键字参数
+- `fields::Vector{Symbol} = [:vz]`: Wavefield components to record. 要录制的波场分量。
+  - `:vx` - Horizontal velocity component / 水平速度分量
+  - `:vz` - Vertical velocity component (recommended) / 垂直速度分量（推荐）
+  - `:vel` - Velocity magnitude √(vx² + vz²) / 速度幅值
+  - `:p` - Pressure field -(τxx + τzz)/2 / 压力场
+  - `:txx` - Normal stress τxx / 正应力 τxx
+  - `:tzz` - Normal stress τzz / 正应力 τzz
+  - `:txz` - Shear stress τxz / 剪应力 τxz
+- `skip::Int = 10`: Record every N time steps. Larger = smaller file.
+  每 N 步录制一帧，值越大文件越小。
+- `downsample::Int = 1`: Spatial downsampling factor. 2 = half resolution.
+  空间降采样因子，2 表示半分辨率。
+- `colormap::Symbol = :seismic`: Color scheme. Options: `:seismic`, `:inferno`, `:viridis`.
+  配色方案。选项：`:seismic`（红白蓝）、`:inferno`（黄红黑）、`:viridis`（绿蓝黄）。
+- `fps::Int = 30`: Video frame rate (frames per second).
+  视频帧率（帧/秒）。
+- `show_boundary::Bool = true`: Show dashed line marking physical domain boundary.
+  是否显示物理域边界虚线框。
 
-# Example
+# Example / 示例
 ```julia
 # Record vz component, every 5 steps, 30 fps
+# 每 5 步录制 vz 分量，30 帧/秒
 video_config = VideoConfig(fields=[:vz], skip=5, fps=30)
 
-# Record multiple fields
+# Record multiple fields / 录制多个场
 video_config = VideoConfig(fields=[:vz, :vx], skip=10)
 
 # Record velocity magnitude with inferno colormap
+# 使用 inferno 配色录制速度幅值
 video_config = VideoConfig(fields=[:vel], skip=5, colormap=:inferno)
-
-# High-quality video (more frames)
-video_config = VideoConfig(fields=[:vz], skip=2, fps=60)
-
-# Hide boundary marker
-video_config = VideoConfig(fields=[:vz], skip=5, show_boundary=false)
 ```
 
-# Notes
-- Total frames = nt ÷ skip
-- Video duration = (nt ÷ skip) / fps seconds
-- Larger `skip` reduces file size but may miss fast wave propagation
-- `:vel` uses asymmetric colormap (0 to max) since magnitude is non-negative
-- The dashed boundary line helps distinguish physical domain from PML/HABC region
-
-See also: [`simulate!`](@ref), [`simulate_irregular!`](@ref)
+# Notes / 注意
+- Total frames = nt ÷ skip / 总帧数 = nt ÷ skip
+- Video duration = (nt ÷ skip) / fps seconds / 视频时长 = (nt ÷ skip) / fps 秒
+- `:vel` uses asymmetric colormap (0 to max) / `:vel` 使用非对称色标（0 到最大值）
 """
 struct VideoConfig
     fields::Vector{Symbol}

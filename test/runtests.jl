@@ -8,7 +8,7 @@
 
 using Test
 using ElasticWave2D
-using ElasticWave2D.API
+using JLD2
 
 @testset "ElasticWave2D.jl" begin
 
@@ -74,13 +74,13 @@ using ElasticWave2D.API
     # Boundary 配置测试
     # =========================================================================
     @testset "Boundary" begin
-        b1 = FreeSurface()
+        b1 = top_image()
         @test b1.top == :image
 
-        b2 = Absorbing()
-        @test b2.top == :habc
+        b2 = top_absorbing()
+        @test b2.top == :absorbing
 
-        b3 = Vacuum(10)
+        b3 = top_vacuum(10)
         @test b3.top == :vacuum
         @test b3.vacuum_layers == 10
     end
@@ -89,10 +89,10 @@ using ElasticWave2D.API
     # SimConfig 测试
     # =========================================================================
     @testset "SimConfig" begin
-        config = SimConfig(nt=1000, fd_order=8, boundary=Vacuum(5))
+        config = SimConfig(nt=1000, fd_order=8)
         @test config.nt == 1000
         @test config.fd_order == 8
-        @test config.boundary.top == :vacuum
+        @test config.dt === nothing
     end
 
     # =========================================================================
@@ -110,32 +110,30 @@ using ElasticWave2D.API
         src = SourceConfig(300.0, 100.0; f0=30.0)
         rec = line_receivers(50.0, 550.0, 11)
 
-        # FreeSurface
-        result1 = simulate(model, src, rec;
-            config=SimConfig(nt=200, boundary=FreeSurface()))
+        out1 = OutputConfig(base_dir=mktempdir(), plot_gather=true, video_config=nothing)
+        gather1 = simulate(model, src, rec, top_image(nbc=10), out1, SimConfig(nt=200);
+            backend=CPU_BACKEND, progress=false)
+        @test size(gather1) == (200, 11)
+        @test !all(gather1 .== 0)
+        @test isfile(joinpath(out1.base_dir, "result.jld2"))
+        @test isfile(joinpath(out1.base_dir, "gather.png"))
 
-        @test size(result1.gather) == (200, 11)
-        @test result1.dt > 0
-        @test !all(result1.gather .== 0)  # 有数据
+        out2 = OutputConfig(base_dir=mktempdir(), plot_gather=false, video_config=nothing)
+        gather2 = simulate(model, src, rec, top_vacuum(5; nbc=10), out2, SimConfig(nt=200);
+            backend=CPU_BACKEND, progress=false)
+        @test size(gather2) == (200, 11)
+        @test !all(gather2 .== 0)
 
-        # Vacuum
-        result2 = simulate(model, src, rec;
-            config=SimConfig(nt=200, boundary=Vacuum(5)))
-
-        @test size(result2.gather) == (200, 11)
-        @test !all(result2.gather .== 0)
-
-        # Absorbing
-        result3 = simulate(model, src, rec;
-            config=SimConfig(nt=200, boundary=Absorbing()))
-
-        @test size(result3.gather) == (200, 11)
+        out3 = OutputConfig(base_dir=mktempdir(), plot_gather=false, video_config=nothing)
+        gather3 = simulate(model, src, rec, top_absorbing(nbc=10), out3, SimConfig(nt=200);
+            backend=CPU_BACKEND, progress=false)
+        @test size(gather3) == (200, 11)
     end
 
     # =========================================================================
-    # 多炮测试
+    # Batch 测试
     # =========================================================================
-    @testset "MultiShot" begin
+    @testset "Batch" begin
         nx, nz = 60, 40
         dx = 10.0f0
         vp = fill(2000.0f0, nz, nx)
@@ -143,49 +141,26 @@ using ElasticWave2D.API
         rho = fill(2000.0f0, nz, nx)
         model = VelocityModel(vp, vs, rho, dx, dx)
 
-        sources = [
-            SourceConfig(200.0, 100.0; f0=30.0),
-            SourceConfig(400.0, 100.0; f0=30.0),
-        ]
+        src_template = SourceConfig(0.0, 0.0; f0=30.0)
         rec = line_receivers(50.0, 550.0, 11)
 
-        results = simulate(model, sources, rec;
-            config=SimConfig(nt=200, boundary=FreeSurface()))
+        sim = BatchSimulator(model, src_template, rec, top_image(nbc=10), SimConfig(nt=120); backend=CPU_BACKEND)
 
-        @test length(results) == 2
-        @test size(results[1].gather) == (200, 11)
-        @test size(results[2].gather) == (200, 11)
-    end
+        g1 = simulate_shot!(sim, 300.0, 100.0; progress=false)
+        @test size(g1) == (120, 11)
+        @test !all(g1 .== 0)
 
-    # =========================================================================
-    # BatchSimulator 测试
-    # =========================================================================
-    @testset "BatchSimulator" begin
-        nx, nz = 60, 40
-        dx = 10.0f0
-        vp = fill(2000.0f0, nz, nx)
-        vs = fill(1200.0f0, nz, nx)
-        rho = fill(2000.0f0, nz, nx)
-        model = VelocityModel(vp, vs, rho, dx, dx)
-
-        rec_x = Float32.(50:50:550)
-        rec_z = fill(10.0f0, length(rec_x))
-
-        sim = BatchSimulator(model, rec_x, rec_z; nt=200, f0=30.0f0)
-
-        @test sim.is_initialized == true
-
-        # 单炮
-        gather1 = simulate_shot!(sim, 300.0f0, 100.0f0)
-        @test size(gather1) == (200, length(rec_x))
-
-        # 多炮
-        src_x = Float32[200.0, 300.0, 400.0]
-        src_z = Float32[100.0, 100.0, 100.0]
-        gathers = simulate_shots!(sim, src_x, src_z)
-
+        xs = [200.0, 300.0, 400.0]
+        zs = [100.0, 100.0, 100.0]
+        gathers = simulate_shots!(sim, xs, zs)
         @test length(gathers) == 3
-        @test all(size(g) == (200, length(rec_x)) for g in gathers)
+        @test all(size(g) == (120, 11) for g in gathers)
+
+        out = OutputConfig(base_dir=mktempdir(), plot_gather=false, video_config=nothing)
+        simulate_shots!(sim, xs, zs; store=false, outputs=out, progress=false)
+        @test isfile(joinpath(out.base_dir, "shot_0001.jld2"))
+        @test isfile(joinpath(out.base_dir, "shot_0002.jld2"))
+        @test isfile(joinpath(out.base_dir, "shot_0003.jld2"))
     end
 
     # =========================================================================
@@ -201,22 +176,19 @@ using ElasticWave2D.API
             10.0f0, 10.0f0
         )
 
-        result = simulate(model,
-            SourceConfig(200.0, 50.0; f0=30.0),
-            line_receivers(50.0, 350.0, 7);
-            config=SimConfig(nt=100, boundary=FreeSurface()))
+        src = SourceConfig(200.0, 50.0; f0=30.0)
+        rec = line_receivers(50.0, 350.0, 7)
+        out = OutputConfig(base_dir=mktempdir(), plot_gather=false, video_config=nothing)
 
-        # 保存和加载
-        tmpfile = tempname() * ".jld2"
-        save_result(result, tmpfile)
+        gather = simulate(model, src, rec, top_image(nbc=10), out, SimConfig(nt=100);
+            backend=CPU_BACKEND, progress=false)
+        @test size(gather) == (100, 7)
 
-        loaded = load_result(tmpfile)
-
-        @test size(loaded.gather) == size(result.gather)
-        @test loaded.dt == result.dt
-        @test loaded.nt == result.nt
-
-        rm(tmpfile)
+        result_path = joinpath(out.base_dir, "result.jld2")
+        @test isfile(result_path)
+        data = JLD2.load(result_path)
+        @test size(data["gather"]) == (100, 7)
+        @test data["nt"] == 100
     end
 
 end

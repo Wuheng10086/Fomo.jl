@@ -6,7 +6,7 @@
 # Project Structure:
 # ==================
 # src/
-# ├── api/               # High-level user API (recommended entry point)
+# ├── api/               # User API surface (single-shot simulate)
 # ├── compute/           # Hardware abstraction (CPU/CUDA)
 # ├── core/              # Fundamental data structures
 # ├── physics/           # Physical laws and numerical kernels
@@ -17,8 +17,8 @@
 #
 # Usage:
 # ======
-#   using ElasticWave2D.API
-#   result = simulate(model, SourceConfig(...), line_receivers(...))
+#   using ElasticWave2D
+#   gather = simulate(model, source, receivers, boundary, outputs, simConfig)
 #
 # ==============================================================================
 
@@ -70,6 +70,19 @@ export Wavefield, Medium, HABCConfig
 export Source, StressSource, ForceSource, Receivers, SimParams
 export ShotResult, VelocityModel, BoundaryConfig
 
+# --- User-Facing Types ---
+export AbstractWavelet, RickerWavelet, CustomWavelet, Ricker, generate
+export SourceMechanism, Explosion, ForceX, ForceZ, StressTxx, StressTzz, StressTxz
+export SourceConfig
+export RecordType, Vz, Vx, Pressure
+export ReceiverConfig, line_receivers
+
+# --- User API ---
+export SimConfig, OutputConfig
+export top_image, top_absorbing, top_vacuum
+export simulate
+export BatchSimulator, simulate_shot!, simulate_shots!
+
 # --- Initialization ---
 export init_medium, init_wavefield, init_habc, setup_receivers
 export get_fd_coefficients
@@ -89,14 +102,13 @@ export normalize_wavelet, wavelet_info, validate_external_wavelet
 # --- Physics (Kernels) ---
 export update_velocity!, update_stress!
 export apply_habc!, apply_habc_velocity!, apply_habc_stress!
-export backup_boundary!, apply_image_method!
+export backup_boundary!, apply_free_surface_velocity!, apply_free_surface_stress!
 export inject_source!, record_receivers!, reset!
 
 # --- Solver ---
 export TimeStepInfo
 export time_step!, run_time_loop!, run_time_loop_with_boundaries!
 export compose_on_step
-export BatchSimulator, simulate_shot!, simulate_shots!, benchmark_shots
 
 # --- Visualization ---
 export VideoConfig, FieldRecorder, MultiFieldRecorder
@@ -110,13 +122,7 @@ export convert_model, model_info, resample_model, suggest_grid_spacing
 export SurveyGeometry, MultiShotGeometry
 export create_geometry, save_geometry, load_geometry
 
-# --- Outputs ---
-export OutputConfig, ArtifactsManifest
-export results_dir, videos_dir, figures_dir, logs_dir
-export ensure_output_dirs, resolve_output_path
-export default_result_filename, default_video_filename
-export record_artifact!, get_artifact
-export write_manifest
+# --- Outputs (internal utilities; keep unexported to reduce API surface) ---
 
 # ==============================================================================
 # Include Files
@@ -138,6 +144,7 @@ include("physics/wave_propagation/velocity_kernel.jl")
 include("physics/wave_propagation/stress_kernel.jl")
 include("physics/boundaries/absorbing_boundary.jl")
 include("physics/boundaries/vacuum_boundary.jl")
+include("physics/boundaries/free_surface_boundary.jl")
 include("physics/interaction/source_receiver_kernel.jl")
 include("physics/interaction/wavelet.jl")
 
@@ -166,7 +173,7 @@ include("io/geometry_io.jl")
 include("outputs/paths.jl")
 include("outputs/artifacts.jl")
 
-# 8. High-level API (recommended for most users)
-include("api/API.jl")
+# 8. User API (single-shot)
+include("api/single_shot_api.jl")
 
 end # module ElasticWave2D

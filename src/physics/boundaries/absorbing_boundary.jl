@@ -21,7 +21,7 @@ Backup boundary field values into `old` for HABC extrapolation.
 OPTIMIZED with explicit @simd and @inbounds
 """
 function copy_boundary_strip!(old, new, nbc, nx, nz, is_free_surface)
-    j_top = is_free_surface ? nbc + 1 : 1
+    j_top = 1 # 始终从顶部开始备份，确保即使有自由表面，顶部的 HABC 也能工作
 
     # Vertical strips (Left/Right) - vectorized
     @inbounds for j in j_top:nz
@@ -129,14 +129,12 @@ function apply_habc!(f, f_old, H, weights, nx, nz, is_free_surface)
         end
     end
 
-    # Top Edge (不含角落) - Skip if Free Surface
-    if !is_free_surface
-        @inbounds for j in j_top_start:j_top_end
-            @simd for i in i_edge_start:i_edge_end
-                sum_z = -qz * f[i, j+1] - qt_z * f_old[i, j] - qxt * f_old[i, j+1]
-                w = weights[j, i]
-                f[i, j] = w * f[i, j] + (1.0f0 - w) * sum_z
-            end
+    # Top Edge (不含角落)
+    @inbounds for j in j_top_start:j_top_end
+        @simd for i in i_edge_start:i_edge_end
+            sum_z = -qz * f[i, j+1] - qt_z * f_old[i, j] - qxt * f_old[i, j+1]
+            w = weights[j, i]
+            f[i, j] = w * f[i, j] + (1.0f0 - w) * sum_z
         end
     end
 
@@ -164,25 +162,23 @@ function apply_habc!(f, f_old, H, weights, nx, nz, is_free_surface)
         end
     end
 
-    if !is_free_surface
-        # Left-Top Corner
-        @inbounds for j in j_top_start:j_top_end
-            @simd for i in i_left_start:i_left_end
-                sum_x = -qx * f[i+1, j] - qt_x * f_old[i, j] - qxt * f_old[i+1, j]
-                sum_z = -qz * f[i, j+1] - qt_z * f_old[i, j] - qxt * f_old[i, j+1]
-                w = weights[j, i]
-                f[i, j] = w * f[i, j] + (1.0f0 - w) * 0.5f0 * (sum_x + sum_z)
-            end
+    # Left-Top Corner
+    @inbounds for j in j_top_start:j_top_end
+        @simd for i in i_left_start:i_left_end
+            sum_x = -qx * f[i+1, j] - qt_x * f_old[i, j] - qxt * f_old[i+1, j]
+            sum_z = -qz * f[i, j+1] - qt_z * f_old[i, j] - qxt * f_old[i, j+1]
+            w = weights[j, i]
+            f[i, j] = w * f[i, j] + (1.0f0 - w) * 0.5f0 * (sum_x + sum_z)
         end
+    end
 
-        # Right-Top Corner
-        @inbounds for j in j_top_start:j_top_end
-            @simd for i in i_right_start:i_right_end
-                sum_x = -qx * f[i-1, j] - qt_x * f_old[i, j] - qxt * f_old[i-1, j]
-                sum_z = -qz * f[i, j+1] - qt_z * f_old[i, j] - qxt * f_old[i, j+1]
-                w = weights[j, i]
-                f[i, j] = w * f[i, j] + (1.0f0 - w) * 0.5f0 * (sum_x + sum_z)
-            end
+    # Right-Top Corner
+    @inbounds for j in j_top_start:j_top_end
+        @simd for i in i_right_start:i_right_end
+            sum_x = -qx * f[i-1, j] - qt_x * f_old[i, j] - qxt * f_old[i-1, j]
+            sum_z = -qz * f[i, j+1] - qt_z * f_old[i, j] - qxt * f_old[i, j+1]
+            w = weights[j, i]
+            f[i, j] = w * f[i, j] + (1.0f0 - w) * 0.5f0 * (sum_x + sum_z)
         end
     end
 end
@@ -213,35 +209,6 @@ function apply_habc_stress!(::CPUBackend, W::Wavefield, H::HABCConfig, M::Medium
 end
 
 # ==============================================================================
-# Free Surface Condition - OPTIMIZED
-# ==============================================================================
-
-"""
-    apply_image_method!(backend, W, M)
-
-Apply stress-free boundary condition at top (z=0) using Image Method.
-Sets stress to zero at surface and applies antisymmetric mirroring to ghost points.
-"""
-function apply_image_method!(::CPUBackend, W::Wavefield, M::Medium)
-    if !M.is_free_surface
-        return nothing
-    end
-
-    nx = M.nx
-    j_fs = M.pad + 1
-    M_order = M.M  # FIXED: 从 Medium 获取，而不是硬编码
-
-    # Vectorized loop
-    @inbounds for j in (j_fs-M_order):j_fs
-        @simd for i in 1:nx
-            W.tzz[i, j] = 0.0f0
-            W.txz[i, j] = 0.0f0
-        end
-    end
-    return nothing
-end
-
-# ==============================================================================
 # GPU Implementations - OPTIMIZED
 # ==============================================================================
 
@@ -252,7 +219,7 @@ function _backup_boundary_kernel_optimized!(vx, vx_old, vz, vz_old, txx, txx_old
     j = (blockIdx().y - 1) * blockDim().y + threadIdx().y
 
     if i <= nx && j <= nz
-        j_top = is_free_surface ? nbc + 1 : 1
+        j_top = 1 # 始终备份顶部
         if j >= j_top
             # Check if we're in a boundary strip region
             is_strip = (i <= nbc + 2) || (i >= nx - nbc - 1) ||
@@ -332,7 +299,7 @@ function _habc_edges_kernel!(f, f_old, w, qx, qz, qt_x, qt_z, qxt, nbc, nx, nz, 
         in_left = i <= nbc + 1
         in_right = i >= nx - nbc
         in_bottom = j >= nz - nbc
-        in_top = !is_free_surface && j <= nbc + 1
+        in_top = j <= nbc + 1
 
         # 只处理边缘区域（不含角落）
         is_left_edge = in_left && !in_bottom && !in_top
@@ -375,7 +342,7 @@ function _habc_corners_kernel!(f, f_old, w, qx, qz, qt_x, qt_z, qxt, nbc, nx, nz
         in_left = i <= nbc + 1
         in_right = i >= nx - nbc
         in_bottom = j >= nz - nbc
-        in_top = !is_free_surface && j <= nbc + 1
+        in_top = j <= nbc + 1
 
         # 只处理角落区域
         is_corner = (in_left || in_right) && (in_top || in_bottom)
@@ -408,34 +375,3 @@ function _habc_corners_kernel!(f, f_old, w, qx, qz, qt_x, qt_z, qxt, nbc, nx, nz
     return nothing
 end
 
-function apply_image_method!(::CUDABackend, W::Wavefield, M::Medium)
-    if !M.is_free_surface
-        return nothing
-    end
-
-    nx = M.nx
-    j_fs = M.pad + 1
-    M_order = M.M  # FIXED: 从 Medium 获取，而不是硬编码
-
-    # Threads cover x dimension (256) and layers (1)
-    # We use blockIdx.y to handle multiple layers (surface + ghosts)
-    total_layers = M_order + 1
-
-    threads = (256, 1)
-    blocks = (cld(nx, 256), total_layers)
-
-    @cuda threads = threads blocks = blocks _image_method_kernel!(W.tzz, W.txz, nx, j_fs, M_order)
-    return nothing
-end
-
-function _image_method_kernel!(tzz, txz, nx, j_fs, M_order)
-    i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
-    j_offset = blockIdx().y - 1
-    j = j_fs - M_order + j_offset
-
-    if i <= nx && j >= 1 && j <= j_fs
-        @inbounds tzz[i, j] = 0.0f0
-        @inbounds txz[i, j] = 0.0f0
-    end
-    return nothing
-end

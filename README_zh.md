@@ -73,8 +73,7 @@ Pkg.develop(path="E:/dev/ElasticWave2D.jl")
 ## 快速开始
 
 ```julia
-using ElasticWave2D.API
-using ElasticWave2D: OutputConfig, resolve_output_path
+using ElasticWave2D
 
 # 创建一个简单的双层模型
 nx, nz = 200, 100
@@ -87,25 +86,64 @@ vp[50:end, :] .= 3500.0f0  # 下层速度更快
 
 model = VelocityModel(vp, vs, rho, dx, dx)
 
-# 建议：每次运行使用一个独立输出目录（扁平布局，所有产物直接写在该目录下）
-outputs = OutputConfig(base_dir="outputs/quickstart")
+outputs = OutputConfig(base_dir="outputs/quickstart", plot_gather=true, video_config=nothing)
+boundary = top_vacuum(10)  # 或 top_image(), top_absorbing()
+simconf = SimConfig(nt=1000, cfl=0.4, fd_order=8, dt=nothing)
 
 # 运行模拟
-result = simulate(
+gather = simulate(
     model,
     SourceConfig(1000.0, 20.0; f0=20.0),           # 震源位于 (1000m, 20m深度)
-    line_receivers(100.0, 1900.0, 181; z=10.0);    # 181 个检波器
-    config = SimConfig(nt=1000, boundary=Vacuum(10)),
-    outputs = outputs
+    line_receivers(100.0, 1900.0, 181; z=10.0),    # 181 个检波器
+    boundary,
+    outputs,
+    simconf
 )
 
-# 获取结果
-println("道集大小: ", size(result.gather))
-plot_gather(result; output=resolve_output_path(outputs, :figures, "gather.png"))
-save_result(result, resolve_output_path(outputs, :results, "result.jld2"))
+println("道集大小: ", size(gather))
+# 运行后目录内会生成:
+# - result.jld2
+# - gather.png (plot_gather=true 时)
 ```
 
-更完整的输出组织与示例用法见 [USAGE_zh.md](docs/USAGE_zh.md)。
+## 多炮批量模拟
+
+使用 `BatchSimulator` 预分配资源，高效执行多炮采集：
+
+```julia
+using ElasticWave2D
+
+# 模型设置（与单炮相同）
+model = VelocityModel(vp, vs, rho, dx, dx)
+
+# 创建批量模拟器（只分配一次 GPU/CPU 资源）
+src_template = SourceConfig(0.0, 0.0; f0=20.0)  # 位置会被覆盖
+receivers = line_receivers(100.0, 1900.0, 181; z=10.0)
+boundary = top_image(nbc=50)
+simconf = SimConfig(nt=2000)
+
+sim = BatchSimulator(model, src_template, receivers, boundary, simconf)
+
+# 定义炮点位置
+src_x = Float32.(500:200:2500)  # 11 炮
+src_z = fill(20.0f0, length(src_x))
+
+# 执行所有炮（结果存内存）
+gathers = simulate_shots!(sim, src_x, src_z)
+
+# 或者使用输出配置和回调函数
+outputs = OutputConfig(base_dir="outputs/batch", plot_gather=true, plot_setup=true)
+simulate_shots!(sim, src_x, src_z; store=false, outputs=outputs) do gather, i
+    @info "第 $i 炮完成" size=size(gather)
+end
+```
+
+单炮复用已分配的模拟器：
+
+```julia
+gather1 = simulate_shot!(sim, 500.0f0, 20.0f0)
+gather2 = simulate_shot!(sim, 600.0f0, 20.0f0; progress=true)
+```
 
 ## 示例
 
@@ -113,17 +151,23 @@ save_result(result, resolve_output_path(outputs, :results, "result.jld2"))
 双层介质中的波传播，带视频输出。
 
 ```julia
-using ElasticWave2D.API
+using ElasticWave2D
 
 model = VelocityModel(vp, vs, rho, 10.0f0, 10.0f0)
 
-result = simulate(
+outputs = OutputConfig(
+    base_dir="outputs/elastic_wave_demo",
+    plot_gather=true,
+    video_config=VideoConfig(fields=[:vz], skip=20, fps=30),
+)
+
+gather = simulate(
     model,
     SourceConfig(2000.0, 50.0, Ricker(15.0)),
-    line_receivers(100, 3900, 191);
-    config = SimConfig(nt=3000, boundary=FreeSurface()),
-    outputs = OutputConfig(base_dir="outputs/elastic_wave_demo"),
-    video = Video(fields=[:vz], interval=20, fps=30)
+    line_receivers(100, 3900, 191),
+    top_image(),
+    outputs,
+    SimConfig(nt=3000)
 )
 ```
 
@@ -138,17 +182,26 @@ result = simulate(
 用地震绕射波探测地下空腔，真空层处理自由表面和隧道。
 
 ```julia
-using ElasticWave2D: OutputConfig
+using ElasticWave2D
 
-# 创建带隧道的模型（ρ=0 表示空腔）
+# 创建带隧道的模型（ρ=0, vp=0, vs=0 表示空腔）
+nx, nz, dx = 200, 100, 5.0f0
+vp = fill(2000.0f0, nz, nx)
+vs = fill(1200.0f0, nz, nx)
+rho = fill(2000.0f0, nz, nx)
 rho[40:45, 95:105] .= 0.0f0  # 隧道空腔
+vp[40:45, 95:105] .= 0.0f0
+vs[40:45, 95:105] .= 0.0f0
 
-result = simulate(
+model = VelocityModel(vp, vs, rho, dx, dx)
+
+gather = simulate(
     model,
-    SourceConfig(500.0, 10.0; f0=50.0),
-    line_receivers(100, 900, 81);
-    config = SimConfig(nt=2000, boundary=Vacuum(10)),
-    outputs = OutputConfig(base_dir="outputs/tunnel_demo")
+    SourceConfig(250.0, 10.0; f0=60.0),
+    line_receivers(50.0, 950.0, 200; z=10.0),
+    top_vacuum(10),
+    OutputConfig(base_dir="outputs/tunnel_demo", plot_gather=true),
+    SimConfig(nt=1500)
 )
 ```
 
@@ -177,15 +230,15 @@ result = simulate(
 
 | 方法 | 面波 | 适用场景 |
 |------|------|----------|
-| `Absorbing()` | ❌ | 仅体波研究 |
-| `FreeSurface()` | ✅ | 精确的平坦自由表面（镜像法） |
-| `Vacuum(n)` | ✅ | 地形起伏、空腔（推荐） |
+| `top_absorbing()` | ❌ | 仅体波研究 |
+| `top_image()` | ✅ | 精确的平坦自由表面（镜像法） |
+| `top_vacuum(n)` | ✅ | 地形起伏、空腔（推荐） |
 
 ```julia
 # 对比不同边界条件
-for boundary in [Absorbing(), FreeSurface(), Vacuum(10)]
-    result = simulate(model, source, receivers;
-        config = SimConfig(nt=2000, boundary=boundary))
+out = OutputConfig(base_dir="outputs/boundary_compare", plot_gather=false, video_config=nothing)
+for boundary in [top_absorbing(), top_image(), top_vacuum(10)]
+    simulate(model, source, receivers, boundary, out, SimConfig(nt=2000); progress=false)
 end
 ```
 
@@ -218,59 +271,42 @@ ReceiverConfig(x_vec, z_vec)                   # 自定义位置
 ReceiverConfig(x_vec, z_vec, Vx)              # 记录 Vx
 
 # 边界
-FreeSurface()      # 镜像法（平自由表面）
-Absorbing()        # 四边 HABC
-Vacuum(n)          # 顶部 n 层真空（推荐）
+top_image()        # 镜像法（平自由表面）
+top_absorbing()    # 顶边也用吸收
+top_vacuum(n)      # 顶部 n 层真空（推荐）
 
 # 配置
-SimConfig(
-    nt = 3000,           # 时间步数
-    dt = nothing,        # 自动算（CFL）
-    cfl = 0.4,           # CFL 数
-    fd_order = 8,        # 差分精度 (2,4,6,8,10)
-    boundary = Vacuum(10),
-    output_dir = "outputs"  # 兼容字段：建议改用 outputs=OutputConfig(base_dir=...) 管理输出目录
-)
+simconf = SimConfig(nt=3000, dt=nothing, cfl=0.4, fd_order=8)
 
 # 视频
-Video(
-    fields = [:vz],      # 记录哪些场
-    interval = 50,       # 每 N 步存一帧
-    fps = 20,
-    format = :mp4        # :mp4 或 :gif
-)
+video_config = VideoConfig(fields=[:vz], skip=50, fps=20)
 ```
 
 ### 主要函数
 
 ```julia
-# 单炮模拟
-result = simulate(model, source, receivers; config, video=nothing)
+# 单炮模拟（6 个位置参数）
+gather = simulate(model, source, receivers, boundary, outputs, simconf)
 
-# 批量多炮
-using ElasticWave2D
-sim = BatchSimulator(model, rec_x, rec_z; nt=3000, f0=15.0)
-gathers = simulate_shots!(sim, src_x_vec, src_z_vec)
-
-# 结果存取
-save_result(result, "shot_001.jld2")
-result = load_result("shot_001.jld2")
-
-# 绘图
-plot_gather(result)
-
-# 下列函数需要 Plots.jl：先 `using Plots`
-plot_trace(result, 50)
+# 批量模拟（高效多炮）
+sim = BatchSimulator(model, src_template, receivers, boundary, simconf)
+gather = simulate_shot!(sim, src_x, src_z)                    # 单炮
+gathers = simulate_shots!(sim, src_x_vec, src_z_vec)          # 多炮
+simulate_shots!(sim, src_x_vec, src_z_vec; store=false) do gather, i
+    # 回调处理每炮结果
+end
 ```
 
-### 结果结构
+### 输出文件
 
-```julia
-result.gather      # [nt × n_receivers] 地震记录
-result.dt          # 时间步长
-result.nt          # 时间步数
-result.snapshots   # 波场快照（需启用视频录制）
-```
+使用 `OutputConfig(base_dir="outputs/shot1", plot_gather=true, video_config=video_config)` 时：
+
+| 文件 | 说明 |
+|------|------|
+| `result.jld2` | 模拟结果（道集、震源、检波器） |
+| `gather.png` | 道集图（`plot_gather=true` 时） |
+| `setup.png` | 模型 + 震源 + 检波器图（`plot_setup=true` 时） |
+| `wavefield_*.mp4` | 波场动画（`video_config!=nothing` 时） |
 
 ## 性能
 
@@ -283,14 +319,6 @@ result.snapshots   # 波场快照（需启用视频录制）
 | 1200×600 | 8000 | ~3 分钟 |
 
 **CPU**（8核，`-t auto`）：约为 GPU 的 1/10 ~ 1/20 速度。
-
-### 多炮性能
-
-```julia
-using ElasticWave2D
-result = benchmark_shots(model, rec_x, rec_z, src_x, src_z; nt=3000, f0=15.0)
-# GPU 中等网格约 0.1-0.3 秒/炮
-```
 
 ## 为什么做这个
 
@@ -305,8 +333,8 @@ result = benchmark_shots(model, rec_x, rec_z, src_x, src_z; nt=3000, f0=15.0)
 ```
 ElasticWave2D.jl/
 ├── src/
-│   ├── api/                # 高层 API（推荐用这个）
-│   ├── domain/             # 用户层类型（wavelet/source/receiver/boundary/config/result）
+│   ├── api/                # 单炮用户 API（simulate）
+│   ├── domain/             # 用户层基础类型（wavelet/source/receiver）
 │   ├── compute/            # CPU/GPU 抽象
 │   ├── core/               # 基础类型
 │   ├── physics/            # 计算核心

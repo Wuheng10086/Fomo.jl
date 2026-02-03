@@ -8,18 +8,33 @@
     VelocityModel
 
 Standard internal representation for velocity models.
+速度模型的标准内部表示。
 
-# Fields
-- `vp`: P-wave velocity matrix [nz, nx]
-- `vs`: S-wave velocity matrix [nz, nx]
-- `rho`: Density matrix [nz, nx]
-- `dx`, `dz`: Grid spacing
-- `nx`, `nz`: Grid dimensions
-- `x_origin`, `z_origin`: Origin coordinates
-- `name`: Model name
+# Fields / 字段
+- `vp::Matrix{Float32}`: P-wave velocity matrix [nz, nx] (m/s).
+  纵波速度矩阵 [nz, nx]（米/秒）。
+- `vs::Matrix{Float32}`: S-wave velocity matrix [nz, nx] (m/s).
+  横波速度矩阵 [nz, nx]（米/秒）。
+- `rho::Matrix{Float32}`: Density matrix [nz, nx] (kg/m³).
+  密度矩阵 [nz, nx]（千克/立方米）。
+- `dx::Float32`: Grid spacing in X direction (m).
+  X 方向网格间距（米）。
+- `dz::Float32`: Grid spacing in Z direction (m).
+  Z 方向网格间距（米）。
+- `nx::Int`: Number of grid points in X.
+  X 方向网格点数。
+- `nz::Int`: Number of grid points in Z (depth).
+  Z 方向（深度）网格点数。
+- `x_origin::Float32`: X origin coordinate (default 0).
+  X 原点坐标（默认 0）。
+- `z_origin::Float32`: Z origin coordinate (default 0).
+  Z 原点坐标（默认 0）。
+- `name::String`: Model identifier name.
+  模型标识名称。
 
-# Note
+# Note / 注意
 Seismic convention: data is stored as `field[nz, nx]` (depth first).
+地震约定：数据存储为 `field[nz, nx]`（深度优先）。
 """
 struct VelocityModel
     vp::Matrix{Float32}     # P-wave velocity
@@ -38,8 +53,21 @@ end
     VelocityModel(vp, vs, rho, dx, dz; x_origin=0, z_origin=0, name="unnamed")
 
 Construct a VelocityModel with auto-computed dimensions.
+构造速度模型，自动计算网格维度。
 
-# Example
+# Arguments / 参数
+- `vp`: P-wave velocity matrix [nz, nx] (m/s). 纵波速度矩阵。
+- `vs`: S-wave velocity matrix [nz, nx] (m/s). 横波速度矩阵。
+- `rho`: Density matrix [nz, nx] (kg/m³). 密度矩阵。
+- `dx`: Grid spacing in X (m). X 方向网格间距。
+- `dz`: Grid spacing in Z (m). Z 方向网格间距。
+
+# Keyword Arguments / 关键字参数
+- `x_origin`: X origin coordinate. X 原点坐标，默认 0。
+- `z_origin`: Z origin coordinate. Z 原点坐标，默认 0。
+- `name`: Model name. 模型名称，默认 "unnamed"。
+
+# Example / 示例
 ```julia
 vp = fill(3000.0f0, 200, 400)  # [nz, nx]
 vs = fill(1800.0f0, 200, 400)

@@ -145,7 +145,8 @@ function plot_gather(gather::Matrix{Float32},
     title::String="Shot Gather",
     output_path::Union{String,Nothing}=nothing,
     clip_percentile::Real=0.99,
-    scale::Real=1.0)
+    colormap::Symbol=:seismic,
+    aspect=nothing)
 
     nt, n_rec = size(gather)
     @assert length(rec_x) == n_rec "Receiver coordinate length mismatch"
@@ -153,33 +154,39 @@ function plot_gather(gather::Matrix{Float32},
     # Time axis
     t_axis = Float32.((0:nt-1) .* dt)
 
-    # Create figure
-    fig = Figure(size=(1000, 600), fontsize=14)
+    # Create figure with white background (Standard for publications)
+    fig = Figure(size=(800, 600), fontsize=16)
 
     ax = Axis(fig[1, 1],
-        xlabel="Distance (m)",
+        xlabel="Offset (m)",
         ylabel="Time (s)",
         title=title,
-        yreversed=true)
+        yreversed=true,
+        xlabelsize=18, ylabelsize=18,
+        xtickalign=1, ytickalign=1,
+        xminorticksvisible=true, yminorticksvisible=true,
+        aspect=aspect)
 
-    # Amplitude scaling
+    # Determine real amplitude range for clipping
+    # This keeps the Colorbar values "real" rather than normalized to 1.0
     vmax = quantile(abs.(gather[:]), clip_percentile)
-    if vmax ≈ 0.0
-        scaled_gather = gather
-    else
-        scaled_gather = gather .* scale ./ vmax
-    end
+    vmax = vmax == 0 ? 1.0f0 : Float32(vmax)
 
-    # Plot gather
-    hm = heatmap!(ax, Float32.(rec_x), t_axis, scaled_gather',
-        colormap=:seismic)
+    # Plot gather using original values but restricted colorrange
+    hm = heatmap!(ax, Float32.(rec_x), t_axis, gather',
+        colormap=colormap,
+        colorrange=(-vmax, vmax))
 
-    # Colorbar
-    cb = Colorbar(fig[1, 2], hm, label="Amplitude")
+    # Colorbar with standardized labels
+    cb = Colorbar(fig[1, 2], hm, 
+        label="Amplitude", 
+        labelsize=18,
+        ticklabelsize=14,
+        width=15)
 
     # Save if output path provided
     if output_path !== nothing
-        save(output_path, fig)
+        save(output_path, fig, px_per_unit=2) # Higher resolution for publication
         @info "Gather plot saved to $output_path"
     end
 

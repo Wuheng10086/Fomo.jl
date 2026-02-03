@@ -5,7 +5,7 @@
 # ==============================================================================
 
 """
-    BoundaryConfig
+    SolverBoundaryConfig
 
 Configuration for boundary conditions on all sides of the model.
 
@@ -26,16 +26,16 @@ Configuration for boundary conditions on all sides of the model.
 # Example
 ```julia
 # Default: free surface at top, absorbing elsewhere
-config = BoundaryConfig()
+config = SolverBoundaryConfig()
 
 # All absorbing (no surface waves)
-config = BoundaryConfig(top_boundary=:absorbing)
+config = SolverBoundaryConfig(top_boundary=:absorbing)
 
 # Vacuum formulation
-config = BoundaryConfig(top_boundary=:vacuum)
+config = SolverBoundaryConfig(top_boundary=:vacuum)
 ```
 """
-struct BoundaryConfig
+struct SolverBoundaryConfig
     top_boundary::Symbol    # :absorbing, :image, :vacuum
     bottom_boundary::Symbol # :absorbing, :image
     left_boundary::Symbol   # :absorbing, :periodic
@@ -45,7 +45,7 @@ struct BoundaryConfig
 end
 
 # Default constructor
-function BoundaryConfig(;
+function SolverBoundaryConfig(;
     top_boundary::Symbol=:image,  # FIXED: 与 SimulationConfig 保持一致
     bottom_boundary::Symbol=:absorbing,
     left_boundary::Symbol=:absorbing,
@@ -65,19 +65,19 @@ function BoundaryConfig(;
     nbc > 0 || error("nbc must be positive, got $nbc")
     top_padding >= 0 || error("top_padding must be non-negative, got $top_padding")
 
-    BoundaryConfig(top_boundary, bottom_boundary, left_boundary, right_boundary, nbc, top_padding)
+    SolverBoundaryConfig(top_boundary, bottom_boundary, left_boundary, right_boundary, nbc, top_padding)
 end
 
 """
-    is_free_surface(config::BoundaryConfig) -> Bool
+    is_free_surface(config::SolverBoundaryConfig) -> Bool
 
 Check if the top boundary is a free surface (image or vacuum method).
 """
-is_free_surface(config::BoundaryConfig) = config.top_boundary in (:image, :vacuum)
+is_free_surface(config::SolverBoundaryConfig) = config.top_boundary in (:image, :vacuum)
 
 """
-    needs_vacuum_layers(config::BoundaryConfig) -> Bool
+    needs_vacuum_layers(config::SolverBoundaryConfig) -> Bool
 
 Check if the configuration requires vacuum layers at the top.
 """
-needs_vacuum_layers(config::BoundaryConfig) = config.top_boundary == :vacuum
+needs_vacuum_layers(config::SolverBoundaryConfig) = config.top_boundary == :vacuum

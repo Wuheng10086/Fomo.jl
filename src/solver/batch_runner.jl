@@ -6,11 +6,11 @@
 # ==============================================================================
 
 # ==============================================================================
-# BatchSimulator - Pre-initialized simulator for maximum performance
+# SolverBatchSimulator - Pre-initialized simulator for maximum performance
 # ==============================================================================
 
 """
-    BatchSimulator
+    SolverBatchSimulator
 
 Pre-initialized simulator for high-performance batch shot execution.
 All heavy initialization is done once, then shots can be run rapidly.
@@ -18,7 +18,7 @@ All heavy initialization is done once, then shots can be run rapidly.
 # Example
 ```julia
 # Initialize once (includes JIT compilation)
-simulator = BatchSimulator(model, rec_x, rec_z; nt=3000, f0=15.0f0)
+simulator = SolverBatchSimulator(model, rec_x, rec_z; nt=3000, f0=15.0f0)
 
 # Run many shots rapidly
 for (sx, sz) in shot_positions
@@ -30,7 +30,7 @@ end
 gathers = simulate_shots!(simulator, src_x_vec, src_z_vec)
 ```
 """
-mutable struct BatchSimulator
+mutable struct SolverBatchSimulator
     # Backend
     backend::AbstractBackend
 
@@ -56,7 +56,7 @@ mutable struct BatchSimulator
 end
 
 """
-    BatchSimulator(model, rec_x, rec_z; nt, f0, nbc=50, fd_order=8, cfl=0.4, free_surface=true, be=nothing)
+    SolverBatchSimulator(model, rec_x, rec_z; nt, f0, nbc=50, fd_order=8, cfl=0.4, free_surface=true, be=nothing)
 
 Create a pre-initialized batch simulator for high-performance multi-shot simulation.
 
@@ -75,18 +75,18 @@ Create a pre-initialized batch simulator for high-performance multi-shot simulat
 - `be::Union{AbstractBackend,Nothing}=nothing`: Backend (auto-select if nothing)
 
 # Returns
-- `BatchSimulator`: Ready-to-use simulator
+- `SolverBatchSimulator`: Ready-to-use simulator
 
 # Example
 ```julia
-sim = BatchSimulator(model, rec_x, rec_z; nt=4000, f0=15.0f0)
+sim = SolverBatchSimulator(model, rec_x, rec_z; nt=4000, f0=15.0f0)
 
 # Now run shots efficiently
 gather1 = simulate_shot!(sim, 5000.0f0, 10.0f0)
 gather2 = simulate_shot!(sim, 6000.0f0, 10.0f0)
 ```
 """
-function BatchSimulator(
+function SolverBatchSimulator(
     model::VelocityModel,
     rec_x::Vector{<:Real},
     rec_z::Vector{<:Real};
@@ -136,7 +136,7 @@ function BatchSimulator(
     wavelet = ricker_wavelet(Float32(f0), dt, nt)
     wavelet_device = to_device(wavelet, be)
 
-    return BatchSimulator(
+    return SolverBatchSimulator(
         be, medium, habc, fd_coeffs, wavefield, receivers,
         wavelet_device, params, Float32(f0), model.dx, model.dz, medium.pad, true
     )
@@ -147,15 +147,15 @@ end
 # ==============================================================================
 
 """
-    simulate_shot!(sim::BatchSimulator, src_x, src_z; wavelet=nothing) -> Matrix{Float32}
+    simulate_shot!(sim::SolverBatchSimulator, src_x, src_z; wavelet=nothing) -> Matrix{Float32}
 
 Run a single shot using pre-initialized simulator. Returns gather matrix.
 
 This is the fastest way to run individual shots as all initialization
-has been done in the BatchSimulator constructor.
+has been done in the SolverBatchSimulator constructor.
 
 # Arguments
-- `sim`: Pre-initialized BatchSimulator
+- `sim`: Pre-initialized SolverBatchSimulator
 - `src_x`: Source x position in meters
 - `src_z`: Source z position in meters
 
@@ -167,11 +167,11 @@ has been done in the BatchSimulator constructor.
 
 # Example
 ```julia
-sim = BatchSimulator(model, rec_x, rec_z; config=config)
+sim = SolverBatchSimulator(model, rec_x, rec_z; config=config)
 gather = simulate_shot!(sim, 5000.0f0, 10.0f0)
 ```
 """
-function simulate_shot!(sim::BatchSimulator, src_x::Real, src_z::Real;
+function simulate_shot!(sim::SolverBatchSimulator, src_x::Real, src_z::Real;
     wavelet::Union{Vector{Float32},Nothing}=nothing)
 
     @assert sim.is_initialized "Simulator not initialized"
@@ -213,7 +213,7 @@ _get_gather_from_batch(::CUDABackend, rec::Receivers) = Array(rec.data)
 # ==============================================================================
 
 """
-    simulate_shots!(sim::BatchSimulator, src_x, src_z; verbose=false) -> Vector{Matrix{Float32}}
+    simulate_shots!(sim::SolverBatchSimulator, src_x, src_z; verbose=false) -> Vector{Matrix{Float32}}
 
 Run multiple shots using pre-initialized simulator.
 
@@ -221,7 +221,7 @@ This is the most efficient way to run many shots as all initialization
 is done once and memory is reused between shots.
 
 # Arguments
-- `sim`: Pre-initialized BatchSimulator
+- `sim`: Pre-initialized SolverBatchSimulator
 - `src_x`: Vector of source x positions in meters
 - `src_z`: Vector of source z positions in meters
 
@@ -235,7 +235,7 @@ is done once and memory is reused between shots.
 
 # Example
 ```julia
-sim = BatchSimulator(model, rec_x, rec_z; config=config)
+sim = SolverBatchSimulator(model, rec_x, rec_z; config=config)
 
 # Run 100 shots
 src_x = Float32.(range(1000, 15000, length=100))
@@ -243,7 +243,7 @@ src_z = fill(10.0f0, 100)
 gathers = simulate_shots!(sim, src_x, src_z; verbose=true)
 ```
 """
-function simulate_shots!(sim::BatchSimulator,
+function simulate_shots!(sim::SolverBatchSimulator,
     src_x::Vector{<:Real},
     src_z::Vector{<:Real};
     wavelet::Union{Vector{Float32},Nothing}=nothing,
@@ -324,7 +324,7 @@ Benchmark shot simulation performance with proper warmup.
 - `nt::Int`: Number of time steps (required)
 - `f0::Real`: Source frequency (required)
 - `n_warmup::Int=2`: Number of warmup shots
-- Other kwargs passed to BatchSimulator
+- Other kwargs passed to SolverBatchSimulator
 
 # Returns
 - NamedTuple with timing results
@@ -356,9 +356,9 @@ function benchmark_shots(
     be = be === nothing ? (is_cuda_available() ? backend(:cuda) : backend(:cpu)) : be
 
     # Initialize
-    println("Initializing BatchSimulator...")
+    println("Initializing SolverBatchSimulator...")
     t_init = time()
-    sim = BatchSimulator(model, rec_x, rec_z; nt=nt, f0=f0, be=be, kwargs...)
+    sim = SolverBatchSimulator(model, rec_x, rec_z; nt=nt, f0=f0, be=be, kwargs...)
 
     # Synchronize if CUDA
     if sim.backend isa CUDABackend
