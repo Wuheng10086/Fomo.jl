@@ -20,6 +20,8 @@
 - ✅ **CPU optimized too** — Multi-threaded with `julia -t auto`
 - ✅ **Flexible boundaries** — HABC, Image Method, vacuum formulation
 
+you can see **Benckmark** result at [docs/benchmark.md](docs/benchmark.md)
+
 ## Features
 
 | Feature | Description |

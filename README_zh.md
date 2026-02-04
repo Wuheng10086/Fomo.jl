@@ -20,6 +20,8 @@
 - ✅ **CPU 多线程** —— `julia -t auto` 自动并行
 - ✅ **边界条件** —— HABC、镜像法、真空层
 
+你可以在这里查看性能测试[docs/benchmark.md](docs/benchmark.md)
+
 ## 特性
 
 | 特性 | 说明 |
